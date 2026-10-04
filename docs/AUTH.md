@@ -67,7 +67,7 @@
      (`RedirectGuard`); redirect para outro host é recusado e vira `.http(status: 3xx)`.
 
 8. Logout / revoke:
-   POST /auth/v4/logout. Limpa sessão + seeds da memória (zeragem best-effort, ver §4).
+   DELETE /auth/v4 (best-effort, depois de limpar a sessão local). Limpa sessão + seeds da memória (zeragem best-effort, ver §4).
 ```
 
 ## 2. SRP-6a detalhe
