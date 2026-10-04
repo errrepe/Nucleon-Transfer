@@ -108,9 +108,10 @@ actor SessionManager {
               let serverEphem = Data(base64Encoded: info.serverEphemeral) else {
             throw ProtonAPIError.srpParamsOutOfBounds("auth/info not base64")
         }
-        let hashed = try PasswordHash.hash(version: info.version, password: password,
+        var hashed = try PasswordHash.hash(version: info.version, password: password,
                                            username: username, salt: salt,
                                            modulus: modulus, bcrypt: bcrypt)
+        defer { SecureBytes.wipe(&hashed) }   // password-equivalent (F8.1-S7)
         let proofs = try SRPClient.generateProofs(hashedPassword: hashed,
                                                  serverEphemeral: serverEphem,
                                                  modulus: modulus)

@@ -2,7 +2,7 @@
 // Algorithm adapted from vapor-community/bcrypt Hash.swift (MIT) with native
 // Swift types ([UInt8], no external Core/Random/Debugging deps).
 // Verifiable against the canonical vector:
-//   password "password", salt "$2a$06$DCq7YPn5Rq63x1Lad4cll." -> digest "TV4S6ytwfsfvkgY8jIucDrjc8deX1s."
+//   password "" (empty), salt "$2a$06$DCq7YPn5Rq63x1Lad4cll." -> digest "TV4S6ytwfsfvkgY8jIucDrjc8deX1s."
 enum EksBlowfish {
     /// - Parameters:
     ///   - password: raw password bytes (NUL is appended internally per bcrypt spec)
@@ -13,7 +13,14 @@ enum EksBlowfish {
         precondition(salt.count == 16, "bcrypt salt must be 16 bytes")
         var p = BcryptTables.p
         var s = BcryptTables.s
-        let key = password + [0]
+        var key = password + [0]
+        // The key schedule (p, s) and the NUL-terminated copy are
+        // password-derived: zero them on the way out (F8.1-S7, best-effort).
+        defer {
+            SecureBytes.wipe(&key)
+            SecureBytes.wipe(&p)
+            SecureBytes.wipe(&s)
+        }
         enhance(&p, &s, data: salt, key: key)
 
         let rounds = 1 << cost
@@ -23,6 +30,7 @@ enum EksBlowfish {
         }
 
         var cdata = BcryptTables.ctext
+        defer { SecureBytes.wipe(&cdata) }
         for _ in 0..<64 {
             for j in 0..<3 {
                 encipher(p: p, s: s, lr: &cdata, off: j * 2)
@@ -37,7 +45,9 @@ enum EksBlowfish {
             out.append(UInt8((word >> 8) & 0xFF))
             out.append(UInt8(word & 0xFF))
         }
-        return Array(out.prefix(23))
+        let digest = Array(out.prefix(23))
+        SecureBytes.wipe(&out)
+        return digest
     }
 
     // MARK: - private

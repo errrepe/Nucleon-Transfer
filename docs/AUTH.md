@@ -67,7 +67,7 @@
      (`RedirectGuard`); redirect para outro host é recusado e vira `.http(status: 3xx)`.
 
 8. Logout / revoke:
-   POST /auth/v4/logout. Limpa sessão + seeds da memória.
+   POST /auth/v4/logout. Limpa sessão + seeds da memória (zeragem best-effort, ver §4).
 ```
 
 ## 2. SRP-6a detalhe
@@ -109,7 +109,13 @@
   Re-login a cada launch; refresh single-flight (sob demanda, no 401)
   mantém a sessão viva.
 - Nunca em Keychain, UserDefaults, SwiftData, plist, logs, crash reports.
-- Seeds destravadas idem: só em `KeyringCache` (memória), `lock()` limpa.
+- Seeds destravadas idem: só em `KeyringCache` (memória), `lock()` zera e limpa.
+- Zeragem é best-effort (`SecureBytes`, `memset_s`): o app zera os buffers
+  que possui (estado do bcrypt, hash da senha, senha salgada, passphrases
+  decifradas, seeds no `lock()`/`reset()`). A `String` do campo de senha,
+  cópias feitas pelo runtime, objetos de chave do CryptoKit e `Data` ainda
+  compartilhada (copy-on-write) não têm garantia de zeragem — só são
+  liberadas.
 
 ## 5. Erros comuns
 

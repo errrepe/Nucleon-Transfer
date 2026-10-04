@@ -3,7 +3,9 @@
 // error (announced to VoiceOver), prominent Sign In that swaps to a
 // spinner while SRP runs, then the third-party disclaimer. Credentials go
 // to AppSession; the password field clears on submit — the retained copy
-// lives as zeroed-after-use Data inside AppSession.pendingPassword.
+// lives as zeroed-after-use Data inside AppSession.pendingPassword. The
+// field's own String storage cannot be wiped (Swift strings are immutable
+// values); it is dropped, not zeroed.
 import AppKit // NSApp.applicationIconImage — header icon
 import SwiftUI
 

@@ -73,9 +73,10 @@ actor KeyringCache {
         for addr in addresses {
             for ref in addr.keys where ref.isActive {
                 guard let tokenArmored = ref.token, !tokenArmored.isEmpty else { continue }
-                let passphrase = try DecryptChain.addressKeyPassphrase(
+                var passphrase = try DecryptChain.addressKeyPassphrase(
                     token: tokenArmored, signature: ref.signature, userKeys: userKeys
                 )
+                defer { SecureBytes.wipe(&passphrase) }   // F8.1-S7, best-effort
                 var keys = try unlockSecretKeys(armored: ref.privateKey, passphrase: passphrase, idPrefix: "\(addr.id)/\(ref.id)")
                 for i in keys.indices { keys[i].email = addr.email }
                 out.append(contentsOf: keys)
@@ -95,5 +96,13 @@ actor KeyringCache {
 
     func seed(for keyID: String) -> Data? { seeds[keyID] }
 
-    func lock() { seeds.removeAll() }
+    /// Drops every seed, zeroing each buffer first (best-effort: bytes still
+    /// shared with a live `UnlockedKey` elsewhere are left to ARC — see
+    /// SecureBytes). AppSession drops its `addressKeys` before calling this.
+    func lock() {
+        for keyID in Array(seeds.keys) {
+            SecureBytes.wipe(&seeds[keyID, default: Data()])
+        }
+        seeds.removeAll()
+    }
 }

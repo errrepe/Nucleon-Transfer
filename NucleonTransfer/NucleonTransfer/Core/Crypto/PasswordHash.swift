@@ -29,8 +29,13 @@ enum PasswordHash {
             var salted = salt
             salted.append(contentsOf: "proton".utf8)
             let encoded = DotSlashBase64.encode(salted)
-            let crypted = try bcrypt.hash(password: password, dotSlashSalt: "$2y$10$\(encoded)")
-            return ExpandHash.expand(crypted + modulus)
+            var crypted = try bcrypt.hash(password: password, dotSlashSalt: "$2y$10$\(encoded)")
+            var input = crypted + modulus
+            defer {
+                SecureBytes.wipe(&crypted)
+                SecureBytes.wipe(&input)
+            }
+            return ExpandHash.expand(input)
         default:
             // Versions 0/1/2 are legacy MD5/SHA-512-prehash schemes (go-srp
             // hash.go); refused fail-closed (F8.1-S1). Unknown future versions

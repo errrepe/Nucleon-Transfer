@@ -26,7 +26,14 @@ struct ProtonBcryptHasher: BcryptHasher {
             throw ProtonAPIError.invalidBcryptSalt
         }
 
-        let digest = EksBlowfish.hash(password: Array(password), salt: saltBytes, cost: cost)
+        var passwordBytes = Array(password)
+        var digest = EksBlowfish.hash(password: passwordBytes, salt: saltBytes, cost: cost)
+        defer {
+            SecureBytes.wipe(&passwordBytes)
+            SecureBytes.wipe(&digest)
+        }
+        // The encoded String copy cannot be wiped (best-effort, F8.1-S7);
+        // the returned Data belongs to the caller.
         let full = "$\(version)$\(parts[2])$\(saltStr)" + BcryptBase64.encode(digest)
         return Data(full.utf8)
     }

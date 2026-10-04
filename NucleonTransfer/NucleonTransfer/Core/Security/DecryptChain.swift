@@ -53,12 +53,13 @@ enum DecryptChain {
             throw DecryptChainError.missingMaterial("share passphrase/key")
         }
         let candidates = addressKeys.compactMap(\.candidate)
-        let passphrase = try MessageDecrypt.decrypt(armored: passArmored, candidates: candidates)
+        var passphrase = try MessageDecrypt.decrypt(armored: passArmored, candidates: candidates)
+        defer { SecureBytes.wipe(&passphrase) }
         try require(SignatureVerification.detached(
-            armored: share.passphraseSignature, over: [Data(passphrase)],
+            armored: share.passphraseSignature, over: [passphrase],
             signerPoints: edPoints(addressKeys)
         ), "share passphrase")
-        return try unlockSecretKeys(armored: keyArmored, passphrase: Data(passphrase),
+        return try unlockSecretKeys(armored: keyArmored, passphrase: passphrase,
                                     idPrefix: "share/\(share.shareID)")
     }
 
@@ -77,12 +78,13 @@ enum DecryptChain {
               let keyArmored = link.nodeKey, !keyArmored.isEmpty else {
             throw DecryptChainError.missingMaterial("node passphrase/key")
         }
-        let passphrase = try MessageDecrypt.decrypt(armored: passArmored, candidates: parentCandidates)
+        var passphrase = try MessageDecrypt.decrypt(armored: passArmored, candidates: parentCandidates)
+        defer { SecureBytes.wipe(&passphrase) }
         try require(SignatureVerification.detached(
-            armored: link.nodePassphraseSignature, over: [Data(passphrase)],
+            armored: link.nodePassphraseSignature, over: [passphrase],
             signerPoints: signerPoints
         ), "node passphrase")
-        return try unlockSecretKeys(armored: keyArmored, passphrase: Data(passphrase),
+        return try unlockSecretKeys(armored: keyArmored, passphrase: passphrase,
                                     idPrefix: "node/\(link.linkID)")
     }
 
@@ -232,7 +234,8 @@ enum DecryptChain {
         guard sk.publicAlgo == 18 || sk.publicAlgo == 22 else {
             throw SecretKeyError.unsupportedAlgo(sk.publicAlgo)
         }
-        let plain = try SecretKeyUnlock.decrypt(sk, passphrase: passphrase)
+        var plain = try SecretKeyUnlock.decrypt(sk, passphrase: passphrase)
+        defer { SecureBytes.wipe(&plain) }   // secret MPIs + checksum (F8.1-S7)
         let seed = sk.publicAlgo == 18
             ? try SecretKeyUnlock.ecdhScalar(plaintext: plain)
             : try SecretKeyUnlock.secretScalar(plaintext: plain)

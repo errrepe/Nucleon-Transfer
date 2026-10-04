@@ -154,14 +154,21 @@ actor NodeKeyResolver {
     }
 
     /// Wipes ALL caches and cancels in-flight resolutions (sign-out).
+    /// Node seeds are zeroed in place first (F8.1-S7, best-effort): folder
+    /// contexts alias the node keyrings, so they are dropped before the
+    /// wipe to leave `nodes` as the last owner. Share keyrings and folder
+    /// hash keys live in immutable contexts and are only dropped.
     func reset() {
         for task in shareTasks.values { task.cancel() }
         for task in nodeTasks.values { task.cancel() }
         shareTasks.removeAll()
         nodeTasks.removeAll()
-        shares.removeAll()
-        nodes.removeAll()
         folders.removeAll()
+        shares.removeAll()
+        for linkID in Array(nodes.keys) {
+            nodes[linkID, default: []].wipeSeeds()
+        }
+        nodes.removeAll()
         links.removeAll()
     }
 

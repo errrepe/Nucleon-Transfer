@@ -24,9 +24,17 @@
   live in actors in memory and die on sign-out/quit. Nothing in
   UserDefaults, SwiftData or plists. No Keychain — re-login on every
   launch, like the official app.
-- The password exists as `Data` only between sign-in and the post-2FA key
-  unlock; its buffer is zeroed (`resetBytes` before the reference drops)
-  on every exit path — success, error, cancel, sign-out.
+- The password is kept as `Data` only between sign-in and the post-2FA key
+  unlock; that buffer is zeroed (`memset_s` via `SecureBytes`, before the
+  last reference drops) on every exit path — success, error, cancel,
+  sign-out.
+- Zeroing is **best-effort**. The app wipes buffers it owns once they are
+  used: bcrypt key schedule and password copy, the SRP password hash, the
+  salted key password, decrypted key passphrases, S2K keys, secret-key
+  plaintext, and cached key seeds on sign-out. It cannot wipe the
+  password field's Swift `String`, copies the runtime makes on its own,
+  CryptoKit key objects, or `Data` still shared with another live value
+  (copy-on-write) — those are released to the allocator, not zeroed.
 - `AccessToken` lives only in the `SessionManager` actor; refresh runs on
   demand after a 401 and is single-flight (one shared refresh, rotated
   tokens reused). A session epoch stops a refresh that finishes after

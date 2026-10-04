@@ -97,13 +97,16 @@ AppSession
  └─ account: Account?                  — email, display name, quota
 ```
 
-The password lives as `Data` only between `signIn` and the post-2FA unlock
-(`pendingPassword`), and its buffer is zeroed on every exit path
-(`clearPendingPassword` — `resetBytes` before the reference drops).
+The password is kept as `Data` only between `signIn` and the post-2FA
+unlock (`pendingPassword`), and that buffer is zeroed on every exit path
+(`clearPendingPassword` — `SecureBytes.wipe` before the last reference
+drops). Other owned secret buffers are zeroed best-effort too; the login
+field's `String` and runtime copies cannot be (see SECURITY.md).
 
 Sign-out order: pause queue + detach uploader → `resolver.reset()` → drop
-resolver/listing/coordinators → `sessions.signOut()` (best-effort
-`DELETE /auth/v4` then local clear) → `keyrings.lock()` → wipe UI state.
+resolver/listing/coordinators → `sessions.signOut()` (local clear, then
+best-effort `DELETE /auth/v4`) → drop `addressKeys` → `keyrings.lock()`
+→ wipe UI state.
 
 ## 4. NodeKeyResolver (actor)
 
