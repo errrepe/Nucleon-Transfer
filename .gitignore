@@ -50,3 +50,6 @@ Package.resolved
 # Logs / temp
 *.log
 tmp/
+
+# Claude Code agent worktrees
+.claude/worktrees/
