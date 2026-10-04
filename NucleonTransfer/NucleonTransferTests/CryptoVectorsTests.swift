@@ -36,10 +36,6 @@ struct CryptoVectorsTests {
         #expect(DotSlashBase64.encode(Data([0xFF, 0x00, 0xAB])) == "9uAp")
     }
 
-    @Test func md5KnownAnswer() {
-        #expect(PasswordHash.md5Hex("abc") == "900150983cd24fb0d6963f7d28e17f72")
-    }
-
     @Test func bigUIntMulExact() {
         // Verified against Python integers. toDataLE is little-endian, so the
         // expected big-endian hex is byte-reversed for comparison.

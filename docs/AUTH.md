@@ -72,8 +72,8 @@
   vapor-community/bcrypt, ver `docs/VENDORED.md`). Semântica idêntica ao fork
   ProtonMail/bcrypt (primeiros 22 chars do salt, eco no output). Validado contra
   bcrypt de referência (Python): 3 vetores incluindo senha UTF-8.
-- Modulus PGP-clearsign: envelope parseado (`ModulusDecoder`); verificação da assinatura
-  GATADA para F2c (GopenPGP bridge). Transporte é TLS.
+- Modulus PGP-clearsign: assinatura verificada (`ModulusDecoder`, F8.1-S1) contra a pubkey
+  SRP da Proton fixada (copiada do go-srp `modulusPubkey`); módulo sem assinatura é rejeitado.
 - **Login real verificado em 2026-09-29** contra a conta de teste dedicada
   (registrada sob o nome antigo do app, `@proton.me`; endereço completo nos
   relatórios de QA no Desktop):

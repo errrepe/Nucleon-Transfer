@@ -1,9 +1,8 @@
 // Nucleon Transfer — SRP-6a client proofs per ProtonMail/go-srp/srp.go
 // Generator is always 2. Bit length 2048. Wire ints are fixed-size little-endian.
-// Modulus signature (PGP clearsign) verification is TODO (F2b, GopenPGP bridge);
-// callers must pass already-decoded modulus bytes for now.
+// Callers pass modulus bytes already verified by ModulusDecoder (pinned-key
+// clearsign check); N is still range-checked here (2048 bits, 3 mod 8).
 import Foundation
-import Security
 
 struct SRPProofs: Sendable {
     var clientEphemeral: Data // 256 bytes LE
@@ -47,46 +46,54 @@ enum SRPClient {
         return kMod
     }
 
-    /// Full client-side proof generation. `clientSecret` injected for testability;
-    /// pass nil to generate securely via SecRandomCopyBytes.
+    /// Rejection-sampling budget for the client secret. go-srp draws
+    /// uniformly in [0, N-1) and loops until > 2*bitLength; we draw 2048
+    /// random bits instead, so one draw lands in range with probability
+    /// >= ~1/2 (N has its top bit set). 64 draws => failure <= 2^-64.
+    static let maxSecretDraws = 64
+
+    /// Full client-side proof generation. `clientSecret` injected for
+    /// testability (range-checked like a drawn one); nil draws it from
+    /// `randomBytes` (checked SecRandomCopyBytes by default). Throws instead
+    /// of ever using an out-of-range secret.
     static func generateProofs(
         hashedPassword: Data,
         serverEphemeral: Data,
         modulus: Data,
-        clientSecret: Data? = nil
+        clientSecret: Data? = nil,
+        randomBytes: (Int) throws -> Data = SecureRandom.bytes
     ) throws -> SRPProofs {
-        precondition(hashedPassword.count == byteLength)
+        guard hashedPassword.count == byteLength else {
+            throw ProtonAPIError.srpParamsOutOfBounds("hashed password length \(hashedPassword.count)")
+        }
         let n = BigUInt(dataLE: modulus)
         let sEphem = BigUInt(dataLE: serverEphemeral)
         try checkParams(serverEphemeral: sEphem, modulus: n)
         let modulusNat = n
         let modMinusOne = BigUInt.sub(n, .one)
 
-        // client secret: random in [2*bitLength, N-1)
-        let secret: BigUInt
+        // client secret: random in (2*bitLength, N-1)
+        let lower = BigUInt(limbs: [UInt32(bitLength * 2)])
+        func inRange(_ c: BigUInt) -> Bool {
+            c.compare(lower) > 0 && c.compare(modMinusOne) < 0
+        }
+        var secret: BigUInt? = nil
         if let clientSecret {
-            secret = BigUInt(dataLE: clientSecret)
+            let c = BigUInt(dataLE: clientSecret)
+            guard inRange(c) else {
+                throw ProtonAPIError.srpParamsOutOfBounds("client secret out of range")
+            }
+            secret = c
         } else {
-            var bytes = Data(repeating: 0, count: byteLength)
-            let status = bytes.withUnsafeMutableBytes {
-                SecRandomCopyBytes(kSecRandomDefault, byteLength, $0.baseAddress!)
+            for _ in 0..<maxSecretDraws {
+                let bytes = try randomBytes(byteLength)
+                guard bytes.count == byteLength else { throw ProtonAPIError.secureRandomFailed }
+                let c = BigUInt(dataLE: bytes)
+                if inRange(c) { secret = c; break }
             }
-            guard status == errSecSuccess else {
-                throw ProtonAPIError.srpParamsOutOfBounds("SecRandomCopyBytes failed")
-            }
-            var candidate = BigUInt(dataLE: bytes)
-            // clamp into range by retrying at most a few times (mirrors go-srp loop)
-            var tries = 0
-            let lower = BigUInt(limbs: [UInt32(bitLength * 2)])
-            while !(candidate.compare(lower) > 0 && candidate.compare(modMinusOne) < 0) && tries < 8 {
-                var b2 = Data(repeating: 0, count: byteLength)
-                _ = b2.withUnsafeMutableBytes {
-                    SecRandomCopyBytes(kSecRandomDefault, byteLength, $0.baseAddress!)
-                }
-                candidate = BigUInt(dataLE: b2)
-                tries += 1
-            }
-            secret = candidate
+        }
+        guard let secret else {
+            throw ProtonAPIError.srpParamsOutOfBounds("could not draw client secret in range")
         }
 
         let clientEphemeral = BigUInt.modPow(.two, secret, modulusNat)

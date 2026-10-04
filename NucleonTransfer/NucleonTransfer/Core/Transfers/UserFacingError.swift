@@ -36,7 +36,11 @@ enum UserFacingError: Sendable {
             case .invalidServerProof:
                 return "Server proof mismatch — possible downgrade attack. Aborted. Do not retry blindly; check your connection and sign in again."
             case .invalidModulusSignature:
-                return "Login setup data was invalid. Check your connection and retry once."
+                return "Proton's login parameters failed signature verification — the connection may be intercepted (proxy, VPN or antivirus TLS inspection). Try another network; do not retry blindly."
+            case let .unsupportedAuthVersion(v):
+                return "This account uses a legacy Proton password scheme (auth version \(v)) that is not supported. Change your password at account.proton.me to upgrade it, then sign in again."
+            case .secureRandomFailed:
+                return "The system random number generator failed. Retry; if it persists, restart your Mac."
             case .bcryptNotAvailable:
                 return "Crypto backend missing (bcrypt). Report this bug — do not retry."
             case .invalidBcryptSalt:

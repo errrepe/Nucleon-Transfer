@@ -10,6 +10,10 @@ enum ProtonAPIError: Error, Sendable, Equatable {
     case invalidServerProof
     case invalidModulusSignature
     case srpParamsOutOfBounds(String)
+    /// Legacy password-hash scheme (auth version < 3, go-srp hash.go) — refused.
+    case unsupportedAuthVersion(Int)
+    /// SecRandomCopyBytes reported failure; no fallback randomness is used.
+    case secureRandomFailed
     case bcryptNotAvailable
     case invalidBcryptSalt
     case keyVerificationFailed
@@ -37,6 +41,7 @@ enum ProtonAPIError: Error, Sendable, Equatable {
              (.bcryptNotAvailable, .bcryptNotAvailable),
              (.invalidBcryptSalt, .invalidBcryptSalt),
              (.keyVerificationFailed, .keyVerificationFailed),
+             (.secureRandomFailed, .secureRandomFailed),
              (.rateLimited, .rateLimited):
             return true
         case let (.api(c1, m1), .api(c2, m2)):
@@ -46,6 +51,8 @@ enum ProtonAPIError: Error, Sendable, Equatable {
         case let (.http(s1, c1, m1), .http(s2, c2, m2)):
             return s1 == s2 && c1 == c2 && m1 == m2
         case let (.untrustedStorageHost(a), .untrustedStorageHost(b)):
+            return a == b
+        case let (.unsupportedAuthVersion(a), .unsupportedAuthVersion(b)):
             return a == b
         default:
             return false
@@ -72,7 +79,9 @@ extension ProtonAPIError: LocalizedError {
         case .humanVerificationRequired: return "Proton requires human verification. Try again later."
         case .rateLimited: return "Too many recent logins (Proton 2028 rate-limit). Wait ~10 minutes before retrying — do not log in repeatedly. If you are signed in, keep using this session."
         case .invalidServerProof: return "Server proof mismatch — possible downgrade attack. Aborted."
-        case .invalidModulusSignature: return "Bad SRP modulus envelope."
+        case .invalidModulusSignature: return "SRP modulus signature missing or invalid."
+        case let .unsupportedAuthVersion(v): return "Unsupported legacy auth version \(v)."
+        case .secureRandomFailed: return "System random number generator failed."
         case .bcryptNotAvailable: return "Crypto backend missing (bcrypt)."
         case .invalidBcryptSalt: return "Malformed bcrypt salt."
         case .keyVerificationFailed: return "Unlocked key does not match its public key."

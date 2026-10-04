@@ -68,8 +68,8 @@ actor SessionManager {
     /// caller must invoke submit2FA(code:) to complete.
     func login(username: String, password: Data) async throws {
         let info = try await api.authInfo(username: username)
-        // Modulus arrives PGP-clearsigned (go-srp readClearSignedMessage).
-        // Signature verification is TODO F2c; transport is TLS-protected.
+        // Modulus arrives PGP-clearsigned; verified against Proton's pinned
+        // SRP key (go-srp readClearSignedMessage) before any use.
         let modulus = try ModulusDecoder.decode(info.modulus)
         guard let salt = Data(base64Encoded: info.salt),
               let serverEphem = Data(base64Encoded: info.serverEphemeral) else {
@@ -116,8 +116,7 @@ actor SessionManager {
     /// Refresh tokens proactively (long syncs expire quickly — rclone #7381).
     func refresh() async throws {
         guard let s = session else { throw ProtonAPIError.unauthorized }
-        var state = Data(count: 32)
-        _ = state.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
+        let state = try SecureRandom.bytes(32)
         let body = AuthRefreshRequest(uid: s.uid, refreshToken: s.refreshToken,
                                       state: state.base64EncodedString(), accessToken: s.accessToken)
         let auth = try await api.authRefresh(body)
