@@ -1,5 +1,7 @@
 // Nucleon Transfer — OpenPGP hashes + string-to-key (RFC 4880 §3.6/3.7).
 // Hash IDs: 1 MD5, 2 SHA-1, 8 SHA-256, 9 SHA-384, 10 SHA-512, 11 SHA-224.
+// MD5/SHA-1 remain here for the SEIPDv1 MDC and legacy S2K only; signature
+// verification restricts itself to SHA-2 (DetachedSig.allowedHashAlgos).
 import CommonCrypto
 import CryptoKit
 import Foundation

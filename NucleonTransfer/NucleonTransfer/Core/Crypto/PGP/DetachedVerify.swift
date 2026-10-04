@@ -2,6 +2,8 @@
 // v4 binary-doc signatures (type 0x00): digest = Hash(data || trailer),
 // trailer = body[0..<hashedEnd] + [version, 0xFF] + len32BE(hashedEnd).
 // Matches go-crypto signature.go signPrepareHash/buildHashSuffix.
+// Only SHA-2 signature hashes are accepted (F8.1-S3): MD5/SHA-1 are
+// collision-broken, so verify throws `SigError.weakHash` for them.
 import CryptoKit
 import Foundation
 
@@ -10,6 +12,9 @@ enum SigError: Error, Sendable {
     case unsupportedAlgo(UInt8)
     case hashMismatch // hash-left quick reject (or wrong hash algo)
     case invalidSignature
+    /// Signature hash algorithm is not in `DetachedSig.allowedHashAlgos`
+    /// (MD5 = 1, SHA-1 = 2, RIPEMD-160 = 3, or unknown).
+    case weakHash(UInt8)
 }
 
 struct DetachedSig: Sendable {
@@ -109,9 +114,16 @@ struct DetachedSig: Sendable {
         self.hashLeftExpected = hashLeftExpected
     }
 
+    /// Signature hash IDs accepted by `verify`: SHA-256, SHA-384, SHA-512,
+    /// SHA-224. MD5 (1) and SHA-1 (2) stay in `PGPHash` only for the MDC
+    /// and S2K, never for signatures.
+    static let allowedHashAlgos: Set<UInt8> = [8, 9, 10, 11]
+
     /// Verifies over `data` with the signer's 32-byte Ed25519 public key
-    /// (0x40 prefix tolerated).
+    /// (0x40 prefix tolerated). Throws `SigError.weakHash` for MD5/SHA-1
+    /// (or any non-SHA-2) signature hashes.
     func verify(data: Data, signerPointMPI: Data) throws -> Bool {
+        guard Self.allowedHashAlgos.contains(hashAlgo) else { throw SigError.weakHash(hashAlgo) }
         var point = signerPointMPI
         if point.count == 33, point.first == 0x40 { point = point.dropFirst() }
         guard point.count == 32, edSignature.count == 64,

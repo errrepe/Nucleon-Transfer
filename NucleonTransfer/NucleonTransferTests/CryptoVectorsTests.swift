@@ -219,14 +219,16 @@ struct CryptoVectorsTests {
         #expect(sess == session)
     }
 
-    @Test func sedEncryptDecryptTag9AES128() throws {
-        // Tag 9 (resync CFB, no MDC) roundtrip with AES-128.
+    @Test func sedTag9AES128Rejected() throws {
+        // F8.1-S3: was a tag 9 (resync CFB, no MDC) roundtrip. Decrypting
+        // SED without integrity protection is now refused (EFAIL class),
+        // even when the session key is correct.
         let session = HX("00112233445566778899aabbccddeeff")
         let inner = LiteralPacket.build(data: Data("tag9-roundtrip-ok".utf8))
         let body = try SEDEncrypt.encrypt(inner: inner, sessionKey: session, symAlgoID: 7, useMDC: false)
-        let back = try SEDDecrypt.decrypt(sedBody: body, sessionKey: session, symAlgoID: 7, expectMDC: false)
-        #expect(back == inner)
-        #expect(try SEDDecrypt.literalData(back) == Data("tag9-roundtrip-ok".utf8))
+        #expect(throws: SEDError.integrityProtectionRequired) {
+            _ = try SEDDecrypt.decrypt(sedBody: body, sessionKey: session, symAlgoID: 7, expectMDC: false)
+        }
     }
 
     @Test func sedEncryptDecryptTag18AES256() throws {
@@ -267,8 +269,10 @@ struct CryptoVectorsTests {
         #expect(try MessageDecrypt.decrypt(armored: armored, candidates: [candidate]) == Data("hello-nucleon-18".utf8))
     }
 
-    @Test func messageEncryptRoundtripTag9() throws {
-        // Full armored message (PKESK + SED, AES-128) self-roundtrip.
+    @Test func messageTag9Rejected() throws {
+        // F8.1-S3: was a full armored PKESK + SED (tag 9, AES-128)
+        // self-roundtrip. The message still encrypts as [1, 9], but
+        // MessageDecrypt now refuses it with the right key.
         let priv = Curve25519.KeyAgreement.PrivateKey()
         let fp = HX("ffeeddccbbaa99887766554433221100ffeeddcc")
         let oid = HX("2b06010401da470f00")
@@ -285,7 +289,9 @@ struct CryptoVectorsTests {
             scalarLE: priv.rawRepresentation, fingerprint: fp,
             kdfHash: 8, kdfCipher: 7, curveOIDBody: oid
         )
-        #expect(try MessageDecrypt.decrypt(armored: armored, candidates: [candidate]) == Data("hello-nucleon-9".utf8))
+        #expect(throws: SEDError.integrityProtectionRequired) {
+            _ = try MessageDecrypt.decrypt(armored: armored, candidates: [candidate])
+        }
     }
 
     @Test func nameEncryptParentKeyringRule() throws {
