@@ -119,10 +119,12 @@ actor DriveDownloadAdapter {
             shareID: shareID, link: link, parentKeys: parentKeys,
             progress: progress
         )
-        let name = ((try? DecryptChain.decryptName(
+        let name = (try? DecryptChain.decryptName(
             link, parentCandidates: parentKeys.compactMap(\.candidate)
-        )) ?? link.linkID).precomposedStringWithCanonicalMapping
-        let dest = FileDownload.uniqueDestination(in: directory, name: name)
+        )) ?? link.linkID
+        let dest = try FileDownload.safeFileDestination(
+            in: directory, remoteName: name, fallback: link.linkID, root: directory
+        )
         try FileDownload.atomicWrite(bytes, to: dest)
         return dest
     }
@@ -145,17 +147,21 @@ actor DriveDownloadAdapter {
             let bytes = try await downloadFileBytes(
                 shareID: shareID, link: link, parentKeys: parentKeys
             )
-            let name = ((try? DecryptChain.decryptName(
+            let name = (try? DecryptChain.decryptName(
                 link, parentCandidates: parentKeys.compactMap(\.candidate)
-            )) ?? link.linkID).precomposedStringWithCanonicalMapping
-            let dest = FileDownload.uniqueDestination(in: destination, name: name)
+            )) ?? link.linkID
+            let dest = try FileDownload.safeFileDestination(
+                in: destination, remoteName: name, fallback: link.linkID, root: destination
+            )
             try FileDownload.atomicWrite(bytes, to: dest)
-            if let progress { await progress(name, Int64(bytes.count), Int64(bytes.count)) }
+            if let progress {
+                await progress(dest.lastPathComponent, Int64(bytes.count), Int64(bytes.count))
+            }
             return [dest]
         }
         return try await downloadFolder(
             shareID: shareID, folderLinkID: linkID, localDir: destination,
-            progress: progress
+            root: destination, progress: progress
         )
     }
 
@@ -163,6 +169,7 @@ actor DriveDownloadAdapter {
         shareID: String,
         folderLinkID: String,
         localDir: URL,
+        root: URL,
         progress: (@Sendable (String, Int64, Int64) async -> Void)? = nil
     ) async throws -> [URL] {
         let folderKeys = try await resolver.nodeKeys(shareID: shareID, linkID: folderLinkID)
@@ -175,7 +182,8 @@ actor DriveDownloadAdapter {
             at: localDir, withIntermediateDirectories: true
         )
         // Decrypt names first (cheap, local), then subfolders recurse and
-        // files download with bounded parallelism.
+        // files download with bounded parallelism. Names are sanitized
+        // (SafeFilename) and every destination is checked against `root`.
         struct NamedChild: Sendable {
             var link: DriveLink
             var name: String
@@ -183,18 +191,24 @@ actor DriveDownloadAdapter {
         let named = children.map { child in
             NamedChild(
                 link: child,
-                name: ((try? DecryptChain.decryptName(
-                    child, parentCandidates: candidates
-                )) ?? child.linkID).precomposedStringWithCanonicalMapping
+                name: SafeFilename.sanitize(
+                    (try? DecryptChain.decryptName(
+                        child, parentCandidates: candidates
+                    )) ?? child.linkID,
+                    fallback: child.linkID
+                )
             )
         }
         var out: [URL] = []
         // Subfolders first (structure before bytes, TRANSFERS.md §2.2).
         for child in named.filter({ $0.link.isFolder }) {
-            let subdir = localDir.appendingPathComponent(child.name, isDirectory: true)
+            let subdir = try FileDownload.safeSubdirectory(
+                in: localDir, remoteName: child.name,
+                fallback: child.link.linkID, root: root
+            )
             let got = try await downloadFolder(
                 shareID: shareID, folderLinkID: child.link.linkID,
-                localDir: subdir, progress: progress
+                localDir: subdir, root: root, progress: progress
             )
             out.append(contentsOf: got)
         }
@@ -208,8 +222,9 @@ actor DriveDownloadAdapter {
                         shareID: shareID, link: child.link,
                         parentKeys: folderKeys
                     )
-                    let dest = FileDownload.uniqueDestination(
-                        in: localDir, name: child.name
+                    let dest = try FileDownload.safeFileDestination(
+                        in: localDir, remoteName: child.name,
+                        fallback: child.link.linkID, root: root
                     )
                     try FileDownload.atomicWrite(bytes, to: dest)
                     if let progress {

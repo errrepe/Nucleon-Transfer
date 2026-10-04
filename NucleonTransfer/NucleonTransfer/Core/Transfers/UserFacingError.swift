@@ -71,6 +71,8 @@ enum UserFacingError: Sendable {
                 return "Could not open the file key. The file may belong to another key or be corrupted — try again after re-login."
             case .missingRevision:
                 return "No file revision found. The file may have been deleted — reload the browser."
+            case .unsafeDestination:
+                return "Download blocked: a remote name would write outside the chosen folder. Ask the owner to rename the item."
             }
         }
         if let upload = error as? FileUploadError {

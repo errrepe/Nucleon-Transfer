@@ -28,6 +28,9 @@ enum FileDownloadError: Error, Sendable, Equatable {
     case hashMismatch(index: Int)
     case emptyBlockList
     case blockIndexGap
+    /// A destination built from a remote name resolved outside the folder
+    /// the user chose (path traversal / symlink escape) — F8.1-S5.
+    case unsafeDestination
 }
 
 enum FileDownload {
@@ -104,18 +107,51 @@ enum FileDownload {
     /// Best-effort conflict-free destination: `name`, then `name (1)`,
     /// `name (2)`, … (matches the upload-side convention; never overwrites
     /// silently). Extension-aware: "a.txt" → "a (1).txt".
+    /// `name` must already be a single safe component (SafeFilename).
     static func uniqueDestination(in directory: URL, name: String) -> URL {
         let fm = FileManager.default
         let candidate = directory.appendingPathComponent(name, isDirectory: false)
         guard fm.fileExists(atPath: candidate.path) else { return candidate }
-        let stem = (name as NSString).deletingPathExtension
-        let ext = (name as NSString).pathExtension
         for n in 1...1000 {
-            let suffixed = ext.isEmpty ? "\(stem) (\(n))" : "\(stem) (\(n)).\(ext)"
+            // Keep the suffixed name within the 255-byte limit.
+            let suffix = " (\(n))"
+            let base = SafeFilename.capped(
+                name, maxBytes: SafeFilename.maxBytes - suffix.utf8.count
+            )
+            let stem = (base as NSString).deletingPathExtension
+            let ext = (base as NSString).pathExtension
+            let suffixed = ext.isEmpty ? "\(stem)\(suffix)" : "\(stem)\(suffix).\(ext)"
             let url = directory.appendingPathComponent(suffixed, isDirectory: false)
             guard fm.fileExists(atPath: url.path) else { return url }
         }
         return candidate // unreachable in practice; never overwrite loop
+    }
+
+    /// Conflict-free FILE destination for a remote (untrusted) name:
+    /// sanitized via SafeFilename, then verified to stay inside `root` (the
+    /// folder the user chose). Throws `.unsafeDestination` otherwise.
+    static func safeFileDestination(
+        in directory: URL, remoteName: String, fallback: String, root: URL
+    ) throws -> URL {
+        let name = SafeFilename.sanitize(remoteName, fallback: fallback)
+        let dest = uniqueDestination(in: directory, name: name)
+        guard SafeFilename.contained(dest, in: root) else {
+            throw FileDownloadError.unsafeDestination
+        }
+        return dest
+    }
+
+    /// Local subfolder for a remote (untrusted) folder name, same checks as
+    /// safeFileDestination. Folders merge (no " (n)" suffix), as before.
+    static func safeSubdirectory(
+        in directory: URL, remoteName: String, fallback: String, root: URL
+    ) throws -> URL {
+        let name = SafeFilename.sanitize(remoteName, fallback: fallback)
+        let dest = directory.appendingPathComponent(name, isDirectory: true)
+        guard SafeFilename.contained(dest, in: root) else {
+            throw FileDownloadError.unsafeDestination
+        }
+        return dest
     }
 
     /// Atomic write: temp `*.nucleon-part` in the destination directory +
