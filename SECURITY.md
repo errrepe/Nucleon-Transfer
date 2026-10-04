@@ -27,8 +27,11 @@
 - The password exists as `Data` only between sign-in and the post-2FA key
   unlock; its buffer is zeroed (`resetBytes` before the reference drops)
   on every exit path — success, error, cancel, sign-out.
-- `AccessToken` lives only in the `SessionManager` actor; refresh is
-  single-flight with `expiresIn - 60s` expiry margin.
+- `AccessToken` lives only in the `SessionManager` actor; refresh runs on
+  demand after a 401 and is single-flight (one shared refresh, rotated
+  tokens reused). A session epoch stops a refresh that finishes after
+  sign-out from writing the session back. HTTP redirects are followed only
+  to the same https host.
 - **Sign-out order:** pause + detach the upload queue → wipe the
   `NodeKeyResolver` (all cached node/share seeds) → drop listing and
   coordinators → `DELETE /auth/v4` (server-side session revocation,

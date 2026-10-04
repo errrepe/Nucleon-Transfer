@@ -3,6 +3,8 @@
 // x-pm-uid + Bearer on authed calls, 401 -> single refresh retry (in SessionManager).
 // Network hygiene (F8.1-S4): one dedicated ephemeral URLSession (no disk
 // cache, no cookie jar); storage URLs are host-checked before credentials go out.
+// Redirects (F8.1-S6) are only followed to the same https host — a 3xx can
+// never carry a request (and its headers) past `validatedStorageURL`.
 import Foundation
 
 struct APIClient: Sendable {
@@ -14,7 +16,9 @@ struct APIClient: Sendable {
     /// hosts are reused. Ephemeral + nil cache/cookie storage: authenticated
     /// responses (armored keys, salts, Drive metadata) never land in a
     /// Cache.db and no cookie jar persists — README "nothing on disk".
-    static let defaultSession = URLSession(configuration: makeConfiguration())
+    /// `RedirectGuard` refuses any redirect that leaves the original host.
+    static let defaultSession = URLSession(configuration: makeConfiguration(),
+                                           delegate: RedirectGuard(), delegateQueue: nil)
 
     /// The hardened configuration, exposed so tests can assert it and layer
     /// `protocolClasses` on top of the exact production settings.
@@ -331,6 +335,36 @@ struct APIClient: Sendable {
         } catch {
             throw ProtonAPIError.transport(error)
         }
+    }
+}
+
+/// Session delegate that allows an HTTP redirect only when it stays on the
+/// original request's host over https (same port). Anything else — another
+/// host, a downgrade to http, userinfo — is refused: URLSession then
+/// completes with the 3xx response itself, which callers surface as
+/// `.http(status:)`. Same-host is the strictest rule that covers both
+/// policies: API requests stay on the API host, and a storage request
+/// already passed `validatedStorageURL` for exactly that host.
+final class RedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest
+    ) async -> URLRequest? {
+        let origin = task.originalRequest?.url
+        return Self.allows(from: origin, to: request.url) ? request : nil
+    }
+
+    static func allows(from origin: URL?, to target: URL?) -> Bool {
+        guard let origin, let target,
+              origin.scheme?.lowercased() == "https", target.scheme?.lowercased() == "https",
+              target.user == nil, target.password == nil,
+              let host = origin.host?.lowercased(), !host.isEmpty,
+              target.host?.lowercased() == host,
+              (origin.port ?? 443) == (target.port ?? 443)
+        else { return false }
+        return true
     }
 }
 

@@ -50,10 +50,21 @@
    `ProtonSession{uid,accessToken,refreshToken}` só no `SessionManager` actor.
    Sem Keychain, sem disco — re-login a cada launch (como o app oficial).
 
-7. Refresh:
+7. Refresh (reativo, sem timer):
    POST /auth/v4/refresh { RefreshToken, UID }
-   → novos Access+Refresh (rotativo). Single-flight no SessionManager.
-   Agenda refresh em `expiresIn - 60s`.
+   → novos Access+Refresh (rotativo). Disparado só quando uma chamada
+   autenticada volta 401 (`SessionManager.withAuth`); não há refresh
+   agendado por `expiresIn`.
+   - Single-flight: um único `refreshTask` por vez. 401s concorrentes
+     aguardam o mesmo refresh em vez de reenviar o refresh token (que a
+     Proton rotaciona — reuso falha e pode revogar a sessão).
+   - Se o token que falhou já foi trocado por outro chamador, o retry usa o
+     token atual sem novo refresh.
+   - Epoch de sessão: login/signOut incrementam o `epoch` e cancelam o
+     refresh em voo; um refresh que termina sob outro epoch descarta o
+     resultado (`.unauthorized`), então nunca ressuscita sessão deslogada.
+   - Redirects: a `URLSession` só segue 3xx para o mesmo host https
+     (`RedirectGuard`); redirect para outro host é recusado e vira `.http(status: 3xx)`.
 
 8. Logout / revoke:
    POST /auth/v4/logout. Limpa sessão + seeds da memória.
@@ -95,7 +106,8 @@
 
 - Como o app oficial: sessão (`ProtonSession{uid,accessToken,refreshToken}`,
   `SessionManager` actor) vive SÓ em memória e morre no logout/quit.
-  Re-login a cada launch; refresh single-flight mantém a sessão viva.
+  Re-login a cada launch; refresh single-flight (sob demanda, no 401)
+  mantém a sessão viva.
 - Nunca em Keychain, UserDefaults, SwiftData, plist, logs, crash reports.
 - Seeds destravadas idem: só em `KeyringCache` (memória), `lock()` limpa.
 
