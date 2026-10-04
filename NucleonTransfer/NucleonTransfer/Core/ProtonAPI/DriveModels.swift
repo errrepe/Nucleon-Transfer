@@ -223,6 +223,9 @@ struct DriveLink: Decodable, Sendable, Identifiable {
     var nodePassphraseSignature: String?
     /// Address that signed the passphrase/name (go-proton-api Link.SignatureEmail).
     var signatureEmail: String?
+    /// Address that signed the NAME (C# SDK Api/Links/LinkDto.cs
+    /// `NameSignatureEmail`); empty → parent key signed it (anonymous).
+    var nameSignatureEmail: String? = nil
     /// Extended attributes (PGP message to the node key; JSON metadata).
     var xAttr: String?
     var fileProperties: FileProperties?
@@ -247,6 +250,7 @@ struct DriveLink: Decodable, Sendable, Identifiable {
         case nodePassphrase = "NodePassphrase"
         case nodePassphraseSignature = "NodePassphraseSignature"
         case signatureEmail = "SignatureEmail"
+        case nameSignatureEmail = "NameSignatureEmail"
         case xAttr = "XAttr"
         case fileProperties = "FileProperties"
         case folderProperties = "FolderProperties"
@@ -657,10 +661,29 @@ struct RevisionBlock: Decodable, Sendable {
     }
 }
 
+/// Revision thumbnail reference. Its Hash (base64 SHA-256 of the
+/// encrypted thumbnail) is PART OF THE MANIFEST, ahead of the block hashes.
+/// Source: C# SDK Api/Files/ThumbnailDto.cs (`ThumbnailID`, `Type`
+/// 1 = thumbnail / 2 = preview, `Hash` bytes → base64 JSON, `Size`).
+struct RevisionThumbnail: Decodable, Sendable {
+    var type: Int
+    var hash: String
+
+    enum CodingKeys: String, CodingKey {
+        case type = "Type"
+        case hash = "Hash"
+    }
+}
+
 struct RevisionDetail: Decodable, Sendable {
     var id: String
     var blocks: [RevisionBlock]
     var manifestSignature: String?
+    /// Address that signed the manifest (empty → node key, anonymous).
+    var signatureEmail: String?
+    var thumbnails: [RevisionThumbnail]
+    /// Legacy single-thumbnail hash (RevisionMetadata.ThumbnailHash shape).
+    var thumbnailHash: String?
     var size: Int64?
     var state: Int?
     var xAttr: String?
@@ -669,9 +692,28 @@ struct RevisionDetail: Decodable, Sendable {
         case id = "ID"
         case blocks = "Blocks"
         case manifestSignature = "ManifestSignature"
+        case signatureEmail = "SignatureEmail"
+        case thumbnails = "Thumbnails"
+        case thumbnailHash = "ThumbnailHash"
         case size = "Size"
         case state = "State"
         case xAttr = "XAttr"
+    }
+
+    init(
+        id: String, blocks: [RevisionBlock], manifestSignature: String?,
+        signatureEmail: String? = nil, thumbnails: [RevisionThumbnail] = [],
+        thumbnailHash: String? = nil, size: Int64? = nil, state: Int? = nil, xAttr: String? = nil
+    ) {
+        self.id = id
+        self.blocks = blocks
+        self.manifestSignature = manifestSignature
+        self.signatureEmail = signatureEmail
+        self.thumbnails = thumbnails
+        self.thumbnailHash = thumbnailHash
+        self.size = size
+        self.state = state
+        self.xAttr = xAttr
     }
 
     init(from decoder: Decoder) throws {
@@ -679,6 +721,9 @@ struct RevisionDetail: Decodable, Sendable {
         id = (try? c.decode(String.self, forKey: .id)) ?? ""
         blocks = (try? c.decode([RevisionBlock].self, forKey: .blocks)) ?? []
         manifestSignature = try? c.decode(String.self, forKey: .manifestSignature)
+        signatureEmail = try? c.decode(String.self, forKey: .signatureEmail)
+        thumbnails = (try? c.decode([RevisionThumbnail].self, forKey: .thumbnails)) ?? []
+        thumbnailHash = try? c.decode(String.self, forKey: .thumbnailHash)
         size = try? c.decode(Int64.self, forKey: .size)
         state = try? c.decode(Int.self, forKey: .state)
         xAttr = try? c.decode(String.self, forKey: .xAttr)

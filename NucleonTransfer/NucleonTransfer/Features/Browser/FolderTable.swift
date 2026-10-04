@@ -1,6 +1,7 @@
 // Nucleon Transfer — the drive listing as a sortable table (F7 S2.2/S2.3).
 // Columns per spec 6.3: Name (16×16 system icon + middle-truncated name +
-// lock badge for undecrypted names), Modified (monospaced digits), Size
+// lock badge for undecrypted names, warning badge for unverified
+// signatures — F8.1-S2), Modified (monospaced digits), Size
 // (folders show "—", trailing-aligned). Selection and sort order live in
 // BrowserModel; DriveItemOrdering keeps folders first under any order.
 // S2.3 context menus (spec 6.3): Open / Download… / Move to Trash on a
@@ -41,6 +42,14 @@ struct FolderTable: View {
                             .foregroundStyle(.secondary)
                             .accessibilityLabel("Name couldn't be decrypted")
                             .help("This name couldn't be decrypted with your current keys.")
+                    }
+                    if item.signatureIssue {
+                        // F8.1-S2: content-level signature failure — the
+                        // row stays usable; the badge warns (official
+                        // clients' "signature could not be verified").
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(.yellow)
+                            .help("The signature of this item could not be verified.")
                     }
                 }
                 // A2: VoiceOver reads the cell as ONE element —
@@ -128,6 +137,7 @@ struct FolderTable: View {
     private static func nameAccessibilityLabel(for item: DriveItem) -> String {
         var label = "\(item.name), \(item.isFolder ? "folder" : "file")"
         if !item.isNameDecrypted { label += ", name couldn't be decrypted" }
+        if item.signatureIssue { label += ", signature could not be verified" }
         return label
     }
 }

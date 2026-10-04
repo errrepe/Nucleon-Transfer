@@ -25,6 +25,13 @@ struct DecryptCandidate: Sendable {
 enum MessageDecrypt {
     /// Decrypts to literal bytes, trying each candidate seed.
     static func decrypt(armored: String, candidates: [DecryptCandidate]) throws -> Data {
+        try SEDDecrypt.literalData(decryptPackets(armored: armored, candidates: candidates))
+    }
+
+    /// Decrypts to the INNER packet stream (literal plus any one-pass
+    /// signature packets), so callers can verify inline signatures
+    /// (SignatureVerification.inline, F8.1-S2).
+    static func decryptPackets(armored: String, candidates: [DecryptCandidate]) throws -> Data {
         let raw = try Armor.decode(armored)
         let packets = try PGPPackets.parse(raw)
         guard let pkeskBody = packets.first(where: { $0.tag == 1 })?.body else {
@@ -48,11 +55,10 @@ enum MessageDecrypt {
                     kdfHash: c.kdfHash,
                     kdfCipher: c.kdfCipher
                 )
-                let inner = try SEDDecrypt.decrypt(
+                return try SEDDecrypt.decrypt(
                     sedBody: sed.body, sessionKey: session,
                     symAlgoID: cipherFunc, expectMDC: true
                 )
-                return try SEDDecrypt.literalData(inner)
             } catch {
                 lastError = error
             }

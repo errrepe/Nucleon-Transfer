@@ -17,13 +17,15 @@ protocol DriveKeyMaterialSource: Sendable {
 extension DriveClient: DriveKeyMaterialSource {}
 
 /// Crypto seam so traversal/memo logic is testable without real keys.
-/// `.live` wires DecryptChain plus the folder hash-key convention moved
-/// verbatim from DriveUploadAdapter (armored NodeHashKey → node candidates
-/// → base64-utf8 of 32 random bytes — F4.2 live-verified).
+/// `.live` wires DecryptChain: share/node passphrase signatures and the
+/// folder NodeHashKey signature are mandatory (F8.1-S2, fail closed); the
+/// hash key is base64-utf8 of 32 random bytes (F4.2 live-verified).
 struct NodeUnlocker: Sendable {
     var unlockShare: @Sendable (DriveShare, [KeyringCache.UnlockedKey]) throws -> [KeyringCache.UnlockedKey]
+    /// (link, parent candidates, allowed passphrase signer points).
     var unlockNode: @Sendable (DriveLink, [DecryptCandidate], [Data]) throws -> [KeyringCache.UnlockedKey]
-    var folderHashKey: @Sendable (DriveLink, [KeyringCache.UnlockedKey]) throws -> Data
+    /// (folder link, its node keys, the user's address keys).
+    var folderHashKey: @Sendable (DriveLink, [KeyringCache.UnlockedKey], [KeyringCache.UnlockedKey]) throws -> Data
 
     static let live = NodeUnlocker(
         unlockShare: { share, addressKeys in
@@ -34,20 +36,8 @@ struct NodeUnlocker: Sendable {
                 link, parentCandidates: parentCandidates, signerPoints: signerPoints
             )
         },
-        folderHashKey: { link, nodeKeys in
-            guard let armored = link.folderProperties?.nodeHashKey, !armored.isEmpty else {
-                throw TransferFailure.permanent("folder has no NodeHashKey")
-            }
-            let plain = try MessageDecrypt.decrypt(
-                armored: armored, candidates: nodeKeys.compactMap(\.candidate)
-            )
-            guard let token = String(data: plain, encoding: .utf8),
-                  let seed = Data(base64Encoded: token),
-                  seed.count == 32
-            else {
-                throw TransferFailure.permanent("malformed NodeHashKey")
-            }
-            return seed
+        folderHashKey: { link, nodeKeys, addressKeys in
+            try DecryptChain.unlockHashKey(link, nodeKeys: nodeKeys, addressKeys: addressKeys)
         }
     )
 }
@@ -82,11 +72,10 @@ actor NodeKeyResolver {
     }
 
     private let source: any DriveKeyMaterialSource
-    private let addressKeys: [KeyringCache.UnlockedKey]
+    /// The user's unlocked address keys (signer candidates, F8.1-S2).
+    /// Immutable + Sendable, so listings read it without hopping here.
+    nonisolated let addressKeys: [KeyringCache.UnlockedKey]
     private let unlocker: NodeUnlocker
-    /// Address Ed25519 points for passphrase-signature verification —
-    /// computed once here instead of per call (was repeated per adapter).
-    private let signerPoints: [Data]
 
     private var shares: [String: ShareContext] = [:]
     private var nodes: [String: [KeyringCache.UnlockedKey]] = [:]
@@ -106,7 +95,6 @@ actor NodeKeyResolver {
         self.source = source
         self.addressKeys = addressKeys
         self.unlocker = unlocker
-        signerPoints = DecryptChain.edPoints(addressKeys)
     }
 
     // MARK: - public API
@@ -141,7 +129,7 @@ actor NodeKeyResolver {
         let shareCtx = try await share(shareID)
         let keys = try await nodeKeys(shareID: shareID, linkID: linkID)
         let link = try await self.link(shareID: shareID, linkID: linkID)
-        let hashKey = try unlocker.folderHashKey(link, keys)
+        let hashKey = try unlocker.folderHashKey(link, keys, addressKeys)
         let ctx = FolderContext(
             shareID: shareID, linkID: linkID, keys: keys, hashKey: hashKey,
             addressID: shareCtx.addressID, signatureEmail: shareCtx.signatureEmail
@@ -202,24 +190,28 @@ actor NodeKeyResolver {
         if let keys = nodes[linkID] { return keys }
         let ctx = try await share(shareID)
         let link = try await self.link(shareID: shareID, linkID: linkID)
-        let parentCandidates: [DecryptCandidate]
+        let parentKeys: [KeyringCache.UnlockedKey]
         if linkID == ctx.rootLinkID {
             // Root node's passphrase is encrypted to the share keyring.
-            parentCandidates = ctx.keys.compactMap(\.candidate)
+            parentKeys = ctx.keys
         } else if let parentID = link.parentLinkID {
             // Recurse UP via the public entry point: the parent's own
             // resolution is memoized/single-flighted, so mid-chain nodes
             // share fetches across different callers. A cyclic parent chain
             // (corrupt server data) would deadlock here — same exposure the
             // old recursive adapters had; trees are acyclic by construction.
-            parentCandidates = try await nodeKeys(shareID: shareID, linkID: parentID)
-                .compactMap(\.candidate)
+            parentKeys = try await nodeKeys(shareID: shareID, linkID: parentID)
         } else {
             // Parentless non-root link: the old adapters fell back to the
             // share keyring — keep that semantics.
-            parentCandidates = ctx.keys.compactMap(\.candidate)
+            parentKeys = ctx.keys
         }
-        let keys = try unlocker.unlockNode(link, parentCandidates, signerPoints)
+        // Passphrase signers: the link's SignatureEmail address keys, or the
+        // parent key for anonymous links (DecryptChain.nodeSignerPoints).
+        let keys = try unlocker.unlockNode(
+            link, parentKeys.compactMap(\.candidate),
+            DecryptChain.nodeSignerPoints(link, parentKeys: parentKeys, addressKeys: addressKeys)
+        )
         nodes[linkID] = keys
         return keys
     }

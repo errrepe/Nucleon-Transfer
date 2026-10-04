@@ -5,10 +5,12 @@
 // own shareKeys/nodes/roots dictionaries (P6).
 //
 // Flow per file (rclone-captured /tmp/f5ref):
-//   getLink -> unlockNode (parent candidates + address signer points) ->
-//   openContentKey (node candidates) -> getRevision (activeRevision.ID,
-//   fallback: listRevisions last) -> download blocks in parallel (TaskGroup,
-//   max 4) -> FileDownload.reassemble (hash-verify + decrypt) ->
+//   getLink -> unlockNode (parent candidates + SignatureEmail signer points,
+//   fail-closed) -> openContentKey (node candidates) + content-key signature
+//   -> getRevision (activeRevision.ID, fallback: listRevisions last) ->
+//   manifest signature (F8.1-S2) -> download blocks in parallel (TaskGroup,
+//   max 4) -> FileDownload.reassemble (hash-verify + decrypt + block
+//   EncSignature) ->
 //   atomicWrite to a conflict-free destination.
 // Folders download recursively (children listing + name decrypt), preserving
 // structure; files within one folder download with bounded parallelism.
@@ -42,28 +44,75 @@ actor DriveDownloadAdapter {
         parentKeys: [KeyringCache.UnlockedKey],
         progress: (@Sendable (Int, Int) async -> Void)? = nil
     ) async throws -> Data {
-        let signers = DecryptChain.edPoints(addressKeys)
         let nodeKeys = try DecryptChain.unlockNode(
             link, parentCandidates: parentKeys.compactMap(\.candidate),
-            signerPoints: signers
+            signerPoints: DecryptChain.nodeSignerPoints(
+                link, parentKeys: parentKeys, addressKeys: addressKeys
+            )
         )
         guard let ckp = link.fileProperties?.contentKeyPacket, !ckp.isEmpty else {
             throw FileDownloadError.missingContentKey
         }
+        let nodeCandidates = nodeKeys.compactMap(\.candidate)
         let (cipher, contentKey) = try FileUpload.openContentKey(
-            ckp, nodeCandidates: nodeKeys.compactMap(\.candidate)
+            ckp, nodeCandidates: nodeCandidates
         )
         guard cipher == FileUpload.sessionCipher || [7, 8, 9].contains(cipher) else {
             throw FileDownloadError.missingContentKey
         }
+        // F8.1-S2 content integrity: node key + the link author's address
+        // keys may sign the content key (C# SDK NodeCrypto.cs
+        // GetContentKeyAndHashKeyVerificationKeyRing).
+        let nodePoints = DecryptChain.edPoints(nodeKeys)
+        try FileDownload.verifyContentKey(
+            signature: link.fileProperties?.contentKeyPacketSignature,
+            sessionKey: contentKey, packetRaw: Data(base64Encoded: ckp),
+            signerPoints: nodePoints + SignatureVerification.signerPoints(
+                claimedEmail: link.signatureEmail, addressKeys: addressKeys,
+                anonymousFallback: []
+            )
+        )
         let revisionID = try await revisionID(shareID: shareID, link: link)
         let revision = try await drive.getRevision(
             shareID: shareID, linkID: link.linkID, revisionID: revisionID
         )
-        guard !revision.blocks.isEmpty else {
+        let ordered = revision.blocks.sorted { $0.index < $1.index }
+        // Manifest BEFORE any block is fetched: the signed hash list pins
+        // every block (reassemble then checks bytes against those hashes).
+        // Signer: the revision's SignatureEmail address keys, else the node
+        // key (C# SDK RevisionReader.cs VerifyManifestAsync); the link
+        // author's keys are also accepted when the revision names no email.
+        let revisionEmail = revision.signatureEmail ?? ""
+        let manifestSigners = revisionEmail.isEmpty
+            ? nodePoints + SignatureVerification.signerPoints(
+                claimedEmail: link.signatureEmail, addressKeys: addressKeys,
+                anonymousFallback: []
+            )
+            : SignatureVerification.signerPoints(
+                claimedEmail: revisionEmail, addressKeys: addressKeys,
+                anonymousFallback: nodePoints
+            )
+        try FileDownload.verifyManifest(
+            signature: revision.manifestSignature,
+            variants: FileDownload.manifestVariants(
+                blockHashesB64: ordered.map(\.hash),
+                thumbnails: revision.thumbnails,
+                legacyThumbnailHash: revision.thumbnailHash
+            ),
+            signerPoints: manifestSigners
+        )
+        guard !ordered.isEmpty else {
             return Data() // 0-byte file: no blocks (upload parity §1.4)
         }
-        let ordered = revision.blocks.sorted { $0.index < $1.index }
+        // Block EncSignatures: uploader's address keys + node key
+        // (Proton-API-Bridge file_download.go getSignatureVerificationKeyring).
+        let blockCheck = FileDownload.BlockSignatureCheck(
+            nodeCandidates: nodeCandidates,
+            signerPoints: nodePoints + SignatureVerification.signerPoints(
+                claimedEmail: revisionEmail.isEmpty ? link.signatureEmail : revisionEmail,
+                addressKeys: addressKeys, anonymousFallback: []
+            )
+        )
         var fetched = [FileDownload.FetchedBlock?](repeating: nil, count: ordered.count)
         try await withThrowingTaskGroup(of: (Int, FileDownload.FetchedBlock).self) { group in
             var next = 0
@@ -74,7 +123,8 @@ actor DriveDownloadAdapter {
                     let bytes = try await self.drive.downloadBlockBytes(block: block)
                     return (i, FileDownload.FetchedBlock(
                         index: block.index, encrypted: bytes,
-                        expectedHashB64: block.hash
+                        expectedHashB64: block.hash,
+                        encSignature: block.encSignature
                     ))
                 }
             }
@@ -94,7 +144,8 @@ actor DriveDownloadAdapter {
             }
         }
         return try FileDownload.reassemble(
-            blocks: fetched.compactMap { $0 }, contentKey: contentKey
+            blocks: fetched.compactMap { $0 }, contentKey: contentKey,
+            signatures: blockCheck
         )
     }
 

@@ -13,6 +13,10 @@ actor KeyringCache {
         var kdfHash: UInt8
         var kdfCipher: UInt8
         var curveOIDBody: Data
+        /// Email of the address owning this key (address keys only; set by
+        /// `unlockAddressKeys`). Selects signers for a claimed
+        /// SignatureEmail (SignatureVerification.signerPoints, F8.1-S2).
+        var email: String? = nil
 
         var candidate: DecryptCandidate? {
             guard algo == 18, fingerprint.count == 20 else { return nil }
@@ -58,18 +62,23 @@ actor KeyringCache {
     }
 
     /// Unlocks address keys: each address key's Token (passphrase encrypted to
-    /// a user ECDH subkey) is decrypted with the user candidates, then the
-    /// address secret key is unlocked with that passphrase (F3b-2).
+    /// a user ECDH subkey) is decrypted with the user candidates, its
+    /// detached Signature is verified against the user keys (fail-closed,
+    /// F8.1-S2), then the address secret key is unlocked with that
+    /// passphrase (F3b-2). Each unlocked key carries its address email.
     @discardableResult
     func unlockAddressKeys(userKeys: [UnlockedKey]) async throws -> [UnlockedKey] {
         let addresses = try await fetchAddresses()
-        let candidates = userKeys.compactMap(\.candidate)
         var out: [UnlockedKey] = []
         for addr in addresses {
             for ref in addr.keys where ref.isActive {
                 guard let tokenArmored = ref.token, !tokenArmored.isEmpty else { continue }
-                let passphrase = try MessageDecrypt.decrypt(armored: tokenArmored, candidates: candidates)
-                out.append(contentsOf: try unlockSecretKeys(armored: ref.privateKey, passphrase: Data(passphrase), idPrefix: "\(addr.id)/\(ref.id)"))
+                let passphrase = try DecryptChain.addressKeyPassphrase(
+                    token: tokenArmored, signature: ref.signature, userKeys: userKeys
+                )
+                var keys = try unlockSecretKeys(armored: ref.privateKey, passphrase: passphrase, idPrefix: "\(addr.id)/\(ref.id)")
+                for i in keys.indices { keys[i].email = addr.email }
+                out.append(contentsOf: keys)
             }
         }
         guard !out.isEmpty else { throw ProtonAPIError.keyVerificationFailed }
