@@ -47,6 +47,12 @@ enum UserFacingError: Sendable {
                 return "Login setup failed (\(msg)). Check connection and retry once."
             case let .api(code, msg):
                 return message(forCode: code, message: msg)
+            case let .http(status, _, msg):
+                // HTTP status drives the guidance (429 / 5xx / 401 share the
+                // envelope-code wording).
+                return message(forCode: status, message: msg)
+            case let .untrustedStorageHost(host):
+                return "Proton returned a storage address on an unexpected host (\(host)). Nothing was sent. Retry; if it persists, report this bug."
             case let .transport(underlying):
                 return message(for: underlying)
             }

@@ -18,13 +18,13 @@ struct AppVersionHeaderTests {
     @Test func bareURLBlockRequestSendsHonestAppVersion() throws {
         let api = APIClient()
         let req = try api.blockDownloadRequest(
-            bareURL: "https://storage.example.com/blocks",
+            bareURL: "https://fra-storage.proton.me/blocks",
             token: "tok123",
             uid: "uid-abc",
             accessToken: "at-xyz"
         )
         #expect(req.httpMethod == "GET")
-        #expect(req.url?.absoluteString == "https://storage.example.com/blocks")
+        #expect(req.url?.absoluteString == "https://fra-storage.proton.me/blocks")
         #expect(req.value(forHTTPHeaderField: "x-pm-appversion") == AppVersion.headerValue)
         #expect(req.value(forHTTPHeaderField: "Pm-Storage-Token") == "tok123")
         #expect(req.value(forHTTPHeaderField: "x-pm-uid") == "uid-abc")
@@ -34,7 +34,7 @@ struct AppVersionHeaderTests {
     @Test func blockURLRequestSendsHonestAppVersion() throws {
         let api = APIClient()
         let req = try api.blockDownloadURLRequest(
-            url: "https://storage.example.com/blocks/embedded-token",
+            url: "https://fra-storage.proton.me/blocks/embedded-token",
             token: "tok123",
             uid: "uid-abc",
             accessToken: "at-xyz"
@@ -49,7 +49,7 @@ struct AppVersionHeaderTests {
     @Test func blockURLRequestOmitsEmptyStorageToken() throws {
         let api = APIClient()
         let req = try api.blockDownloadURLRequest(
-            url: "https://storage.example.com/blocks/embedded-token",
+            url: "https://fra-storage.proton.me/blocks/embedded-token",
             token: "",
             uid: "uid-abc",
             accessToken: "at-xyz"
