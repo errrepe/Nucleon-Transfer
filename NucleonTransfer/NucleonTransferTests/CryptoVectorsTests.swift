@@ -765,7 +765,8 @@ struct CryptoVectorsTests {
         // encryptSigned (OPS + literal + SIG) to the node key, node-signed.
         let json = try FileUpload.xAttrJSON(
             modificationTime: Date(timeIntervalSince1970: 1_700_000_000),
-            size: 26, mimeType: "text/plain; charset=utf-8", blockSizes: [26]
+            size: 26, mimeType: "text/plain; charset=utf-8", blockSizes: [26],
+            sha1: Data(Insecure.SHA1.hash(data: Data("abc".utf8)))
         )
         let dict = try #require(JSONSerialization.jsonObject(with: json) as? [String: Any])
         let common = try #require(dict["Common"] as? [String: Any])
@@ -773,6 +774,8 @@ struct CryptoVectorsTests {
         #expect(common["MIMEType"] as? String == "text/plain; charset=utf-8")
         #expect(common["BlockSizes"] as? [Int] == [26])
         #expect((common["ModificationTime"] as? String)?.contains("2023-11-14") == true)
+        // Digests.SHA1: lowercase hex (FIPS 180 "abc" vector).
+        #expect(common["Digests"] as? [String: String] == ["SHA1": "a9993e364706816aba3e25717850c26c9cd0d89d"])
         let node = try FolderCreate.generateNode()
         let recipient = try #require(node.ecdhRecipient)
         let armored = try FileUpload.buildXAttr(
@@ -889,6 +892,8 @@ struct CryptoVectorsTests {
         let xcommon = try #require(xattrDict["Common"] as? [String: Any])
         #expect(xcommon["Size"] as? Int == 26)
         #expect((xcommon["BlockSizes"] as? [Int]) == [26])
+        let sha1Hex = Insecure.SHA1.hash(data: fileData).map { String(format: "%02x", $0) }.joined()
+        #expect(xcommon["Digests"] as? [String: String] == ["SHA1": sha1Hex])
     }
 
     @Test func mimeTypeSniffVectors() throws {

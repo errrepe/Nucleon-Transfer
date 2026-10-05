@@ -11,8 +11,9 @@
 //      global executor (this function is @concurrent — never on an actor),
 //      then ONE /drive/blocks request for the batch's upload links and the
 //      batch's POSTs in parallel; the buffers are dropped before the next
-//      batch. Only the block hashes (manifest) and plaintext sizes (XAttr
-//      BlockSizes) outlive a batch. Upstream batches the same way:
+//      batch. Only the block hashes (manifest), plaintext sizes (XAttr
+//      BlockSizes) and a running SHA-1 of the plaintext (XAttr
+//      Digests.SHA1, F8.3-P6) outlive a batch. Upstream batches the same way:
 //      henrybear327/Proton-API-Bridge file_upload.go
 //      `uploadAndCollectBlockData` — `RequestBlockUpload` per
 //      UPLOAD_BATCH_BLOCK_SIZE (8) encrypted blocks, then the batch's
@@ -23,6 +24,7 @@
 // Progress is reported per uploaded block (cumulative plaintext bytes,
 // monotonic). Cancellation is checked between batches and before each POST.
 
+import CryptoKit
 import Foundation
 
 // MARK: - block sources
@@ -195,7 +197,8 @@ enum StreamingUpload {
             )
             let xattr = try FileUpload.xAttrJSON(
                 modificationTime: modificationTime, size: size,
-                mimeType: mime, blockSizes: manifest.plaintextSizes
+                mimeType: mime, blockSizes: manifest.plaintextSizes,
+                sha1: manifest.sha1
             )
             commit = try FileUpload.buildCommit(
                 manifestHashes: manifest.hashes, xAttrJSON: xattr,
@@ -238,10 +241,16 @@ enum StreamingUpload {
     struct Manifest: Sendable {
         var hashes: [Data]
         var plaintextSizes: [Int]
+        /// Raw SHA-1 of the whole plaintext (XAttr Digests.SHA1).
+        var sha1 = Data()
     }
 
     /// Batches of `window` blocks: encode in parallel (child tasks, global
     /// executor), one link request, parallel POSTs, then drop the buffers.
+    /// The plaintext SHA-1 must see the bytes in file order: batches run in
+    /// order, and within a batch each finished block's plaintext is parked
+    /// only until every lower index is hashed (hashing overlaps the other
+    /// encodes), then dropped — no more than the batch already holds.
     @concurrent
     static func uploadBlocks(
         api: some FileUploadAPI,
@@ -260,23 +269,36 @@ enum StreamingUpload {
             hashes: [Data](repeating: Data(), count: count),
             plaintextSizes: [Int](repeating: 0, count: count)
         )
+        var sha1 = Insecure.SHA1()
         var uploaded: Int64 = 0
         var start = 0
         while start < count {
             try Task.checkCancellation()
             let end = min(start + window, count)
-            let batch = try await withThrowingTaskGroup(of: FileUpload.EncodedBlock.self) { group in
+            let batch = try await withThrowingTaskGroup(
+                of: (block: FileUpload.EncodedBlock, plaintext: Data).self
+            ) { group in
                 for i in start..<end {
                     group.addTask {
                         let offset = Int64(i) * Int64(blockSize)
                         let length = Int(min(Int64(blockSize), size - offset))
                         let plaintext = try source.read(offset: offset, count: length)
-                        return try FileUpload.encodeBlock(index: i + 1, plaintext: plaintext, draft: draft)
+                        let block = try FileUpload.encodeBlock(index: i + 1, plaintext: plaintext, draft: draft)
+                        return (block, plaintext)
                     }
                 }
                 var out: [FileUpload.EncodedBlock] = []
                 out.reserveCapacity(end - start)
-                for try await block in group { out.append(block) }
+                var parked: [Int: Data] = [:] // 1-based index -> plaintext
+                var nextToHash = start + 1
+                for try await done in group {
+                    out.append(done.block)
+                    parked[done.block.index] = done.plaintext
+                    while let plaintext = parked.removeValue(forKey: nextToHash) {
+                        sha1.update(data: plaintext)
+                        nextToHash += 1
+                    }
+                }
                 return out.sorted { $0.index < $1.index }
             }
             try Task.checkCancellation()
@@ -316,6 +338,7 @@ enum StreamingUpload {
             }
             start = end
         }
+        manifest.sha1 = Data(sha1.finalize())
         return manifest
     }
 

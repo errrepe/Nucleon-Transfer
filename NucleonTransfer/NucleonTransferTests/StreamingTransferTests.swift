@@ -112,6 +112,21 @@ private actor FakeUploadAPI: FileUploadAPI {
     ) async throws -> Bool { false }
 }
 
+/// Delays the first block of every batch so later blocks finish encoding
+/// first (exercises the in-order SHA-1 feed).
+private struct SlowFirstBlockSource: UploadBlockSource {
+    let data: Data
+    let blockSize: Int
+    let window: Int
+    var size: Int64 { Int64(data.count) }
+
+    func read(offset: Int64, count: Int) throws -> Data {
+        let index = Int(offset) / blockSize
+        if window > 1, index % window == 0, count > 0 { usleep(20_000) }
+        return try DataBlockSource(data: data).read(offset: offset, count: count)
+    }
+}
+
 private actor Recorder<T: Sendable> {
     var values: [T] = []
     func add(_ v: T) { values.append(v) }
@@ -175,6 +190,45 @@ private actor TaskBox {
         let xattr = try JSONDecoder().decode(FileXAttr.self, from: whole.xAttrJSON)
         #expect(xattr.common.blockSizes == [4096, 4096, 4096, 2048])
         #expect(xattr.common.size == Int64(data.count))
+        // Digests.SHA1 (F8.3-P6): whole-plaintext SHA-1, lowercase hex.
+        #expect(xattr.common.digests == FileXAttrDigests(sha1: Data(Insecure.SHA1.hash(data: data))))
+    }
+
+    /// The streamed SHA-1 must be over the plaintext in FILE order even when
+    /// a batch's blocks finish encoding out of order (block 1 of every batch
+    /// is read slowest here), for several windows and an empty file.
+    @Test func xAttrSHA1CoversThePlaintextInOrder() async throws {
+        let keys = try Keys()
+        let blockSize = 1024
+        for (length, window) in [(blockSize * 9 + 77, 4), (blockSize * 5, 2), (blockSize * 3 + 1, 1), (100, 4), (0, 3)] {
+            let data = randomBytes(length)
+            let api = FakeUploadAPI()
+            let result = try await StreamingUpload.run(
+                api: api, shareID: "S", parentLinkID: "P", fileName: "x.bin",
+                source: SlowFirstBlockSource(data: data, blockSize: blockSize, window: window),
+                parentKeys: keys.parentKeys, parentHashKey: keys.parentHashKey,
+                addressKeys: keys.addressKeys, addressID: "A",
+                blockSize: blockSize, window: window
+            )
+            let commit = try #require(await api.commit)
+            let json = try MessageDecrypt.decrypt(
+                armored: commit.xAttr, candidates: result.node.keys.compactMap(\.candidate)
+            )
+            let dict = try #require(JSONSerialization.jsonObject(with: Data(json)) as? [String: Any])
+            let common = try #require(dict["Common"] as? [String: Any])
+            let digests = try #require(common["Digests"] as? [String: Any])
+            let expected = Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            #expect(digests as? [String: String] == ["SHA1": expected], "length \(length) window \(window)")
+            #expect(expected.count == 40)
+        }
+    }
+
+    /// XAttr from builds before F8.3-P6 (no Digests) still decodes.
+    @Test func xAttrWithoutDigestsStillDecodes() throws {
+        let legacy = Data(#"{"Common":{"BlockSizes":[26],"MIMEType":"text/plain","ModificationTime":"2023-11-14T22:13:20Z","Size":26}}"#.utf8)
+        let xattr = try JSONDecoder().decode(FileXAttr.self, from: legacy)
+        #expect(xattr.common.digests == nil)
+        #expect(xattr.common.blockSizes == [26])
     }
 
     @Test func uploadSignaturesUseTheUpstreamFormOnly() async throws {

@@ -53,7 +53,9 @@
 //   = encryptSigned JSON (~148 bytes for the fixture) to the node subkey,
 //   inline-signed by the NODE key (mirrors the folder NodeHashKey precedent;
 //   VARIANT-UNCERTAIN: exact JSON schema + signer; our Common schema is a
-//   best-effort superset Proton clients parse tolerantly).
+//   best-effort superset Proton clients parse tolerantly). Since F8.3-P6
+//   Common also carries `Digests: {"SHA1": "<lowercase hex>"}`, the SHA-1 of
+//   the whole PLAINTEXT, like upstream (see FileXAttrDigests).
 // - `MIMEType` = Go http.DetectContentType style ("text/plain; charset=utf-8"
 //   for text); the storage host comes from UploadLinks BareURL at runtime.
 // - Wild node keys use KDF 03 01 0a 09 (SHA-512/AES-256); ours use
@@ -295,9 +297,11 @@ enum FileUpload {
 
     /// Canonical XAttr JSON (plaintext). Go clients marshal capitalized
     /// field names; ModificationTime is RFC3339 UTC, Size/BlockSizes are
-    /// PLAINTEXT sizes. VARIANT-UNCERTAIN: exact schema (extra fields).
+    /// PLAINTEXT sizes, `sha1` is the raw 20-byte SHA-1 of the whole
+    /// plaintext (written as Digests.SHA1, lowercase hex).
+    /// VARIANT-UNCERTAIN: exact schema (extra fields).
     static func xAttrJSON(
-        modificationTime: Date, size: Int64, mimeType: String, blockSizes: [Int]
+        modificationTime: Date, size: Int64, mimeType: String, blockSizes: [Int], sha1: Data
     ) throws -> Data {
         // RFC3339 UTC with second precision (Go time.RFC3339 shape). New
         // formatter per call: ISO8601DateFormatter is not Sendable (Swift 6).
@@ -309,7 +313,7 @@ enum FileUpload {
         }()
         let xattr = FileXAttr(common: FileXAttrCommon(
             modificationTime: stamp, size: size, mimeType: mimeType,
-            blockSizes: blockSizes
+            blockSizes: blockSizes, digests: FileXAttrDigests(sha1: sha1)
         ))
         // Sorted keys: JSONEncoder's key order is otherwise unspecified, and
         // the doc comment promises a canonical form (F8.3-P2).
@@ -580,7 +584,8 @@ enum FileUpload {
         }
         let xattr = try xAttrJSON(
             modificationTime: modificationTime, size: Int64(data.count),
-            mimeType: mime, blockSizes: blocks.map(\.plaintext.count)
+            mimeType: mime, blockSizes: blocks.map(\.plaintext.count),
+            sha1: Data(Insecure.SHA1.hash(data: data))
         )
         return PreparedUpload(
             request: draft.request, node: draft.node, contentKey: draft.contentKey,
@@ -639,10 +644,39 @@ struct FileXAttrCommon: Codable, Sendable {
     var size: Int64
     var mimeType: String
     var blockSizes: [Int]
+    /// Optional on decode: F4.3-F8.3-P5 builds (and other clients) omit it.
+    var digests: FileXAttrDigests?
     enum CodingKeys: String, CodingKey {
         case modificationTime = "ModificationTime"
         case size = "Size"
         case mimeType = "MIMEType"
         case blockSizes = "BlockSizes"
+        case digests = "Digests"
+    }
+}
+
+/// `Common.Digests`: content digests of the whole PLAINTEXT file (F8.3-P6).
+/// Upstream shape, every client the same: key "SHA1", LOWERCASE HEX of the
+/// 20-byte SHA-1 over the plaintext stream in block order.
+/// - henrybear327/go-proton-api link_file_types.go `RevisionXAttrCommon`
+///   (`Digests map[string]string`), filled by Proton-API-Bridge
+///   file_upload.go `uploadFile` — `Digests: map[string]string{"SHA1":
+///   digests}` with `hex.EncodeToString(sha1Digests.Sum(nil))`, the hasher
+///   fed every plaintext block in `uploadAndCollectBlockData`;
+/// - ProtonDriveApps/sdk js internal/upload/digests.ts `UploadDigests`
+///   (`bytesToHex(sha1)`), internal/nodes/extendedAttributes.ts
+///   (`Common.Digests = { SHA1: ... }`);
+/// - ProtonDriveApps/sdk C# Api/Files/FileContentDigestsDto.cs
+///   (`[JsonPropertyName("SHA1")]`, `ForgivingBytesToHexJsonConverter`),
+///   hashed while streaming in Nodes/Upload/RevisionWriter.cs.
+struct FileXAttrDigests: Codable, Sendable, Equatable {
+    /// Lowercase hex (40 chars).
+    var sha1: String
+    enum CodingKeys: String, CodingKey { case sha1 = "SHA1" }
+
+    init(sha1Hex: String) { self.sha1 = sha1Hex }
+
+    init(sha1 raw: Data) {
+        self.sha1 = raw.map { String(format: "%02x", $0) }.joined()
     }
 }
