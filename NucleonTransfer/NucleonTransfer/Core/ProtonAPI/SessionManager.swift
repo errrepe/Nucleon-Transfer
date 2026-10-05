@@ -56,16 +56,21 @@ actor SessionManager {
     /// (mirrors go-proton-api Client.doRes). Concurrent 401s share a single
     /// refresh; if the token that failed was already rotated by another
     /// caller, the retry uses the current token without refreshing again.
+    /// The op is only ever replayed within the session it started in: if
+    /// the epoch changed (sign-out, re-login, adopt) it fails with
+    /// `.unauthorized` instead of running with another session's tokens.
     func withAuth<T: Sendable>(_ op: @Sendable (String, String) async throws -> T) async throws -> T {
         guard let creds = session else { throw ProtonAPIError.unauthorized }
+        let started = epoch
         do {
             return try await op(creds.uid, creds.accessToken)
         } catch let e as ProtonAPIError where e == .unauthorized {
+            guard epoch == started else { throw ProtonAPIError.unauthorized }
             if let current = session, current.accessToken != creds.accessToken {
                 return try await op(current.uid, current.accessToken)
             }
             try await refresh()
-            guard let retry = session else { throw ProtonAPIError.unauthorized }
+            guard epoch == started, let retry = session else { throw ProtonAPIError.unauthorized }
             return try await op(retry.uid, retry.accessToken)
         }
     }
@@ -153,14 +158,37 @@ actor SessionManager {
     /// (already spent) refresh token again.
     func refresh() async throws {
         if let inFlight = refreshTask {
-            _ = try await inFlight.value
+            try await awaitRefresh(inFlight)
             return
         }
         guard let s = session else { throw ProtonAPIError.unauthorized }
         let started = epoch
         let task = Task { try await self.performRefresh(from: s, epoch: started) }
         refreshTask = task
-        _ = try await task.value
+        try await awaitRefresh(task)
+    }
+
+    /// Waits for a refresh. A refresh cancelled by `replaceSession` (the
+    /// session it belonged to is gone) surfaces as `.unauthorized`, not as
+    /// a cancellation the caller never asked for; a caller whose OWN task
+    /// is cancelled still gets `CancellationError`.
+    private func awaitRefresh(_ task: Task<ProtonSession, Error>) async throws {
+        do {
+            _ = try await task.value
+        } catch {
+            guard Self.isCancellation(error) else { throw error }
+            if Task.isCancelled { throw CancellationError() }
+            throw ProtonAPIError.unauthorized
+        }
+    }
+
+    /// Swift cancellation or URLSession's cancelled-task error (bare or
+    /// wrapped by APIClient as `.transport`).
+    private static func isCancellation(_ error: any Error) -> Bool {
+        if error is CancellationError { return true }
+        if let url = error as? URLError, url.code == .cancelled { return true }
+        if case let .transport(inner)? = error as? ProtonAPIError { return isCancellation(inner) }
+        return false
     }
 
     private func performRefresh(from s: ProtonSession, epoch started: UInt64) async throws -> ProtonSession {

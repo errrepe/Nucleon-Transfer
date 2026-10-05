@@ -63,14 +63,17 @@ actor DriveDownloadAdapter {
         // F8.1-S2 content integrity: node key + the link author's address
         // keys may sign the content key (C# SDK NodeCrypto.cs
         // GetContentKeyAndHashKeyVerificationKeyRing).
+        // Signer sets come from server-claimed emails, so they always
+        // include the node key (FileDownload.trustedSigners): `.noVerifier`
+        // can never pass.
         let nodePoints = DecryptChain.edPoints(nodeKeys)
         try FileDownload.verifyContentKey(
             signature: link.fileProperties?.contentKeyPacketSignature,
             sessionKey: contentKey, packetRaw: Data(base64Encoded: ckp),
-            signerPoints: nodePoints + SignatureVerification.signerPoints(
-                claimedEmail: link.signatureEmail, addressKeys: addressKeys,
-                anonymousFallback: []
-            )
+            signerPoints: FileDownload.trustedSigners(
+                claimedEmail: link.signatureEmail, nodePoints: nodePoints,
+                addressKeys: addressKeys
+            ).points
         )
         let revisionID = try await revisionID(shareID: shareID, link: link)
         let revision = try await drive.getRevision(
@@ -79,19 +82,20 @@ actor DriveDownloadAdapter {
         let ordered = revision.blocks.sorted { $0.index < $1.index }
         // Manifest BEFORE any block is fetched: the signed hash list pins
         // every block (reassemble then checks bytes against those hashes).
-        // Signer: the revision's SignatureEmail address keys, else the node
-        // key (C# SDK RevisionReader.cs VerifyManifestAsync); the link
-        // author's keys are also accepted when the revision names no email.
+        // Signer: the revision's SignatureEmail address keys (C# SDK
+        // RevisionReader.cs VerifyManifestAsync), else the link author's;
+        // the node key always. A foreign/unknown claimed email is NOT
+        // trusted: only the node key or the user's own address keys can
+        // then vouch for the manifest, otherwise the download stops.
+        // Empty files are verified too (manifest over zero block hashes):
+        // RevisionReader.ReadAsync has no empty-file short-circuit and
+        // throws on NotSigned, and every uploader (Nucleon, Proton-API-Bridge)
+        // signs the empty manifest.
         let revisionEmail = revision.signatureEmail ?? ""
-        let manifestSigners = revisionEmail.isEmpty
-            ? nodePoints + SignatureVerification.signerPoints(
-                claimedEmail: link.signatureEmail, addressKeys: addressKeys,
-                anonymousFallback: []
-            )
-            : SignatureVerification.signerPoints(
-                claimedEmail: revisionEmail, addressKeys: addressKeys,
-                anonymousFallback: nodePoints
-            )
+        let signers = FileDownload.trustedSigners(
+            claimedEmail: revisionEmail.isEmpty ? link.signatureEmail : revisionEmail,
+            nodePoints: nodePoints, addressKeys: addressKeys
+        )
         try FileDownload.verifyManifest(
             signature: revision.manifestSignature,
             variants: FileDownload.manifestVariants(
@@ -99,19 +103,17 @@ actor DriveDownloadAdapter {
                 thumbnails: revision.thumbnails,
                 legacyThumbnailHash: revision.thumbnailHash
             ),
-            signerPoints: manifestSigners
+            signerPoints: signers.points,
+            claimResolved: signers.claimResolved
         )
         guard !ordered.isEmpty else {
             return Data() // 0-byte file: no blocks (upload parity §1.4)
         }
-        // Block EncSignatures: uploader's address keys + node key
-        // (Proton-API-Bridge file_download.go getSignatureVerificationKeyring).
+        // Block EncSignatures: same trusted set (Proton-API-Bridge
+        // file_download.go getSignatureVerificationKeyring: uploader's
+        // address keys + node key).
         let blockCheck = FileDownload.BlockSignatureCheck(
-            nodeCandidates: nodeCandidates,
-            signerPoints: nodePoints + SignatureVerification.signerPoints(
-                claimedEmail: revisionEmail.isEmpty ? link.signatureEmail : revisionEmail,
-                addressKeys: addressKeys, anonymousFallback: []
-            )
+            nodeCandidates: nodeCandidates, signerPoints: signers.points
         )
         var fetched = [FileDownload.FetchedBlock?](repeating: nil, count: ordered.count)
         try await withThrowingTaskGroup(of: (Int, FileDownload.FetchedBlock).self) { group in
@@ -233,8 +235,9 @@ actor DriveDownloadAdapter {
             at: localDir, withIntermediateDirectories: true
         )
         // Decrypt names first (cheap, local), then subfolders recurse and
-        // files download with bounded parallelism. Names are sanitized
-        // (SafeFilename) and every destination is checked against `root`.
+        // files download with bounded parallelism. `name` is the RAW
+        // decrypted (untrusted) name: safeSubdirectory/safeFileDestination
+        // sanitize it (SafeFilename) and check the result against `root`.
         struct NamedChild: Sendable {
             var link: DriveLink
             var name: String
@@ -242,12 +245,9 @@ actor DriveDownloadAdapter {
         let named = children.map { child in
             NamedChild(
                 link: child,
-                name: SafeFilename.sanitize(
-                    (try? DecryptChain.decryptName(
-                        child, parentCandidates: candidates
-                    )) ?? child.linkID,
-                    fallback: child.linkID
-                )
+                name: (try? DecryptChain.decryptName(
+                    child, parentCandidates: candidates
+                )) ?? child.linkID
             )
         }
         var out: [URL] = []
@@ -279,7 +279,7 @@ actor DriveDownloadAdapter {
                     )
                     try FileDownload.atomicWrite(bytes, to: dest)
                     if let progress {
-                        await progress(child.name, Int64(bytes.count), Int64(bytes.count))
+                        await progress(dest.lastPathComponent, Int64(bytes.count), Int64(bytes.count))
                     }
                     return [dest]
                 }

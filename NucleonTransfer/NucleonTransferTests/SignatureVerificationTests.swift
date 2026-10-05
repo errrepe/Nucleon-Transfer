@@ -6,6 +6,7 @@
 // DetachedSign / MessageEncrypt.
 import CryptoKit
 import Foundation
+import Synchronization
 import Testing
 
 @testable import NucleonTransfer
@@ -262,6 +263,33 @@ struct AddressTokenAndHashKeySignatureTests {
         }
     }
 
+    /// One address whose Token signature is bad is skipped; the others
+    /// still unlock (go-proton-api parity). The bad key is never returned.
+    @Test func badAddressTokenSignatureSkipsOnlyThatKey() throws {
+        let user = TestIdentity()
+        func address(_ id: String, signedBy signer: TestIdentity) throws -> (ProtonAddress, Data) {
+            let passphrase = NodeKeyGen.randomPassphrase()
+            let key = try NodeKeyGen.generate(passphrase: passphrase)
+            let token = try MessageEncrypt.encrypt(plaintext: passphrase, recipient: user.recipient)
+            let ref = ProtonKeyRef(
+                id: "k-\(id)", privateKey: key.armoredKey, primary: 1, active: 1,
+                token: token, signature: try signer.sign(passphrase)
+            )
+            return (ProtonAddress(id: id, email: "\(id)@proton.me", keys: [ref]), key.edSeed)
+        }
+        let (good, goodSeed) = try address("good", signedBy: user)
+        let (bad, badSeed) = try address("bad", signedBy: TestIdentity())
+
+        let keys = KeyringCache.unlockAddressKeys(addresses: [bad, good], userKeys: user.keys)
+        #expect(!keys.isEmpty)
+        #expect(keys.allSatisfy { $0.email == "good@proton.me" })
+        #expect(keys.contains { $0.seed == goodSeed })
+        #expect(!keys.contains { $0.seed == badSeed })
+
+        // All bad → nothing unlocks (the actor then throws keyVerificationFailed).
+        #expect(KeyringCache.unlockAddressKeys(addresses: [bad], userKeys: user.keys).isEmpty)
+    }
+
     @Test func hashKeySignedByNodeUnlocks() throws {
         let node = TestIdentity()
         let seed = Data((0..<32).map { UInt8($0) })
@@ -291,6 +319,78 @@ struct AddressTokenAndHashKeySignatureTests {
         )
         #expect(throws: DecryptChainError.signatureInvalid(what: "folder hash key")) {
             _ = try DecryptChain.unlockHashKey(makeLink(hashKey: armored), nodeKeys: node.keys, addressKeys: [])
+        }
+    }
+}
+
+// MARK: - address-key unlock through the actor (stubbed /core/v4/addresses)
+
+private let addressesStubBody = Mutex(Data())
+
+/// Answers every request with `addressesStubBody` (HTTP 200, JSON).
+private final class AddressesStubProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let url = request.url ?? URL(fileURLWithPath: "/")
+        let body = addressesStubBody.withLock { $0 }
+        if let ok = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                    headerFields: ["Content-Type": "application/json"]) {
+            client?.urlProtocol(self, didReceive: ok, cacheStoragePolicy: .notAllowed)
+        }
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+@Suite(.serialized)
+struct AddressKeyUnlockActorTests {
+    private func keyring(addresses: [[String: Any]]) async throws -> KeyringCache {
+        let json: [String: Any] = ["Code": 1000, "Addresses": addresses]
+        let body = try JSONSerialization.data(withJSONObject: json)
+        addressesStubBody.withLock { $0 = body }
+        let config = APIClient.makeConfiguration()
+        config.protocolClasses = [AddressesStubProtocol.self]
+        var api = APIClient()
+        api.session = URLSession(configuration: config)
+        let sessions = SessionManager(api: api)
+        await sessions.adopt(ProtonSession(uid: "u", accessToken: "a", refreshToken: "r"))
+        return KeyringCache(api: api, sessions: sessions)
+    }
+
+    private func addressJSON(_ id: String, user: TestIdentity, signer: TestIdentity) throws -> [String: Any] {
+        let passphrase = NodeKeyGen.randomPassphrase()
+        let key = try NodeKeyGen.generate(passphrase: passphrase)
+        return [
+            "ID": id, "Email": "\(id)@proton.me",
+            "Keys": [[
+                "ID": "k-\(id)", "PrivateKey": key.armoredKey, "Primary": 1, "Active": 1,
+                "Token": try MessageEncrypt.encrypt(plaintext: passphrase, recipient: user.recipient),
+                "Signature": try signer.sign(passphrase),
+            ]],
+        ]
+    }
+
+    @Test func oneBadAddressDoesNotAbortSignIn() async throws {
+        let user = TestIdentity()
+        let cache = try await keyring(addresses: [
+            try addressJSON("bad", user: user, signer: TestIdentity()),
+            try addressJSON("good", user: user, signer: user),
+        ])
+        let keys = try await cache.unlockAddressKeys(userKeys: user.keys)
+        #expect(!keys.isEmpty)
+        #expect(keys.allSatisfy { $0.email == "good@proton.me" })
+    }
+
+    @Test func allBadAddressesThrow() async throws {
+        let user = TestIdentity()
+        let cache = try await keyring(addresses: [
+            try addressJSON("bad1", user: user, signer: TestIdentity()),
+            try addressJSON("bad2", user: user, signer: TestIdentity()),
+        ])
+        await #expect(throws: ProtonAPIError.keyVerificationFailed) {
+            _ = try await cache.unlockAddressKeys(userKeys: user.keys)
         }
     }
 }
@@ -407,8 +507,110 @@ struct DownloadSignatureTests {
         #expect(throws: FileDownloadError.manifestSignatureMissing) {
             try FileDownload.verifyManifest(signature: nil, variants: variants, signerPoints: [author.point])
         }
-        // Foreign signer (no verifier) is reported, not thrown.
-        #expect(try FileDownload.verifyManifest(signature: good, variants: variants, signerPoints: []) == .noVerifier)
+        // No verifier is never a pass (F8.1 review).
+        #expect(throws: FileDownloadError.manifestSignatureUnverifiable) {
+            try FileDownload.verifyManifest(signature: good, variants: variants, signerPoints: [])
+        }
+    }
+
+    @Test func foreignRevisionEmailNeedsATrustedSigner() throws {
+        var me = TestIdentity()
+        me.email = "me@proton.me"
+        let node = TestIdentity()
+        let hashes = [Data(repeating: 1, count: 32)]
+        let variants = try FileDownload.manifestVariants(
+            blockHashesB64: blockHashesB64(hashes), thumbnails: [], legacyThumbnailHash: nil
+        )
+        let manifest = FileUpload.manifestInput(hashes: hashes)
+        // Server-claimed author outside the user's addresses.
+        let signers = FileDownload.trustedSigners(
+            claimedEmail: "attacker@evil.example", nodePoints: [node.point], addressKeys: me.keys
+        )
+        #expect(signers.claimResolved == false)
+        #expect(signers.points == [node.point, me.point])
+
+        // Signed by an unrelated key (attacker-chosen hashes) → throws.
+        #expect(throws: FileDownloadError.manifestSignatureUnverifiable) {
+            try FileDownload.verifyManifest(
+                signature: try TestIdentity().sign(manifest), variants: variants,
+                signerPoints: signers.points, claimResolved: signers.claimResolved
+            )
+        }
+        // Signed by the node key → passes.
+        #expect(try FileDownload.verifyManifest(
+            signature: try node.sign(manifest), variants: variants,
+            signerPoints: signers.points, claimResolved: signers.claimResolved
+        ) == .valid)
+        // Signed by one of the user's own address keys → passes too.
+        #expect(try FileDownload.verifyManifest(
+            signature: try me.sign(manifest), variants: variants,
+            signerPoints: signers.points, claimResolved: signers.claimResolved
+        ) == .valid)
+    }
+
+    @Test func trustedSignersAlwaysIncludeTheNodeKey() {
+        var me = TestIdentity()
+        me.email = "me@proton.me"
+        let node = TestIdentity().point
+        let own = FileDownload.trustedSigners(claimedEmail: "ME@proton.me", nodePoints: [node], addressKeys: me.keys)
+        #expect(own.points == [node, me.point] && own.claimResolved)
+        let anon = FileDownload.trustedSigners(claimedEmail: "", nodePoints: [node], addressKeys: me.keys)
+        #expect(anon.points == [node] && anon.claimResolved)
+        let foreign = FileDownload.trustedSigners(claimedEmail: "x@y.z", nodePoints: [node], addressKeys: me.keys)
+        #expect(foreign.points.contains(node))
+    }
+
+    @Test func noVerifierNeverPassesContentKeyOrBlocks() throws {
+        let node = TestIdentity()
+        let sessionKey = Data(repeating: 0x42, count: 32)
+        #expect(throws: FileDownloadError.contentKeySignatureInvalid) {
+            try FileDownload.verifyContentKey(
+                signature: try node.sign(sessionKey), sessionKey: sessionKey,
+                packetRaw: nil, signerPoints: []
+            )
+        }
+        let key = Data(repeating: 0x11, count: 32)
+        let plain = Data("block".utf8)
+        let enc = try FileUpload.encryptBlock(plain, contentKey: key)
+        let hash = try FileUpload.blockHash(enc)
+        let packet = try FileUpload.blockSignaturePacket(
+            blockHash: hash, signerSeedLE: node.ed.rawRepresentation,
+            signerKeyID: Data(node.edFP.suffix(8)), signerFingerprint: node.edFP
+        )
+        let sig = try FileUpload.encryptSignaturePacket(packet, nodeRecipient: node.recipient)
+        #expect(throws: FileDownloadError.blockSignatureInvalid(index: 1)) {
+            _ = try FileDownload.reassemble(
+                blocks: [FileDownload.FetchedBlock(
+                    index: 1, encrypted: enc, expectedHashB64: hash.base64EncodedString(), encSignature: sig
+                )],
+                contentKey: key,
+                signatures: FileDownload.BlockSignatureCheck(
+                    nodeCandidates: node.keys.compactMap(\.candidate), signerPoints: []
+                )
+            )
+        }
+    }
+
+    /// Empty revisions: C# SDK RevisionReader verifies the manifest (zero
+    /// block hashes) with no empty-file short-circuit, so a missing
+    /// signature fails here too; a signed empty manifest passes.
+    @Test func emptyRevisionManifestIsStillVerified() throws {
+        let node = TestIdentity()
+        let variants = try FileDownload.manifestVariants(
+            blockHashesB64: [], thumbnails: [], legacyThumbnailHash: nil
+        )
+        #expect(try FileDownload.verifyManifest(
+            signature: try node.sign(FileUpload.manifestInput(hashes: [])),
+            variants: variants, signerPoints: [node.point]
+        ) == .valid)
+        #expect(throws: FileDownloadError.manifestSignatureMissing) {
+            try FileDownload.verifyManifest(signature: nil, variants: variants, signerPoints: [node.point])
+        }
+        #expect(throws: FileDownloadError.manifestSignatureInvalid) {
+            try FileDownload.verifyManifest(
+                signature: try TestIdentity().sign(Data()), variants: variants, signerPoints: [node.point]
+            )
+        }
     }
 
     @Test func manifestIncludesThumbnailsSortedByType() throws {
@@ -514,6 +716,7 @@ struct DownloadSignatureTests {
     @Test func userFacingMessagesForSignatureFailures() {
         #expect(UserFacingError.message(for: FileDownloadError.manifestSignatureInvalid).contains("signature"))
         #expect(UserFacingError.message(for: FileDownloadError.manifestSignatureMissing).contains("not signed"))
+        #expect(UserFacingError.message(for: FileDownloadError.manifestSignatureUnverifiable).contains("author couldn't be verified"))
         #expect(UserFacingError.message(for: DecryptChainError.signatureMissing(what: "node passphrase"))
             .contains("node passphrase"))
     }

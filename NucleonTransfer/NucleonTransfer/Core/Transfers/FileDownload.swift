@@ -37,6 +37,11 @@ enum FileDownloadError: Error, Sendable, Equatable {
     case manifestSignatureMissing
     /// ManifestSignature does not verify over the block hashes (F8.1-S2).
     case manifestSignatureInvalid
+    /// The revision claims an author outside the user's addresses and the
+    /// manifest verifies with no key we trust (node key / own address
+    /// keys) — foreign public keys are never fetched, so the author can't
+    /// be verified (F8.1 review).
+    case manifestSignatureUnverifiable
     /// A block's EncSignature does not verify (F8.1-S2).
     case blockSignatureInvalid(index: Int)
 }
@@ -162,24 +167,57 @@ enum FileDownload {
         return variants
     }
 
-    /// Manifest check (content integrity): missing → `.manifestSignatureMissing`
-    /// (C# SDK throws `CompletedDownloadManifestVerificationException` on
-    /// `NotSigned` too); invalid or weak hash → `.manifestSignatureInvalid`.
-    /// A foreign signer (`.noVerifier`, shared content) is returned, not
-    /// thrown — its public keys are not fetched (see report).
+    /// Keys allowed to sign content whose author is CLAIMED by the server
+    /// (revision/link SignatureEmail). The node key is always included, so
+    /// the set is never empty for a real node and `.noVerifier` cannot be
+    /// reached through an attacker-chosen email.
+    /// - empty claim → node key (C# SDK AuthorshipClaim anonymous fallback);
+    /// - one of the user's addresses → that address's keys + node key;
+    /// - anything else (foreign/unknown) → node key + ALL the user's own
+    ///   address keys (`claimResolved == false`): foreign public keys are
+    ///   never fetched, so only keys we already trust can vouch for it.
+    static func trustedSigners(
+        claimedEmail: String?,
+        nodePoints: [Data],
+        addressKeys: [KeyringCache.UnlockedKey]
+    ) -> (points: [Data], claimResolved: Bool) {
+        guard let email = claimedEmail?.trimmingCharacters(in: .whitespaces), !email.isEmpty else {
+            return (nodePoints, true)
+        }
+        let claimed = SignatureVerification.signerPoints(
+            claimedEmail: email, addressKeys: addressKeys, anonymousFallback: []
+        )
+        if !claimed.isEmpty { return (nodePoints + claimed, true) }
+        return (nodePoints + DecryptChain.edPoints(addressKeys), false)
+    }
+
+    /// Manifest check (content integrity) — must verify against a key we
+    /// trust, nothing else passes:
+    /// - missing → `.manifestSignatureMissing` (C# SDK RevisionReader.cs
+    ///   throws `CompletedDownloadManifestVerificationException` on
+    ///   `NotSigned`, empty revisions included);
+    /// - no verifier, or no trusted key verifies a FOREIGN claim
+    ///   (`claimResolved == false`) → `.manifestSignatureUnverifiable`;
+    /// - invalid or weak hash → `.manifestSignatureInvalid`.
     @discardableResult
     static func verifyManifest(
         signature: String?,
         variants: [Data],
-        signerPoints: [Data]
+        signerPoints: [Data],
+        claimResolved: Bool = true
     ) throws -> SignatureVerification.Outcome {
         let outcome = SignatureVerification.detached(
             armored: signature, over: variants, signerPoints: signerPoints
         )
         switch outcome {
-        case .valid, .noVerifier: return outcome
+        case .valid: return outcome
         case .missing: throw FileDownloadError.manifestSignatureMissing
-        case .invalid, .weakHash: throw FileDownloadError.manifestSignatureInvalid
+        case .noVerifier: throw FileDownloadError.manifestSignatureUnverifiable
+        case .invalid:
+            throw claimResolved
+                ? FileDownloadError.manifestSignatureInvalid
+                : FileDownloadError.manifestSignatureUnverifiable
+        case .weakHash: throw FileDownloadError.manifestSignatureInvalid
         }
     }
 
@@ -190,8 +228,9 @@ enum FileDownload {
     /// Nucleon F4.3 uploads signed the raw PKESK bytes
     /// (FileUpload.signContentKeyPacket), so that variant is accepted too.
     /// The signature is OPTIONAL upstream (C# `ContentKeySignature` is
-    /// nullable → `NotSigned` is a non-fatal authorship failure): missing /
-    /// foreign signer is returned; invalid or weak → throws.
+    /// nullable → `NotSigned` is a non-fatal authorship failure): missing is
+    /// returned; invalid, weak or no verifier (empty signer set — never a
+    /// pass, see `trustedSigners`) → throws.
     @discardableResult
     static func verifyContentKey(
         signature: String?,
@@ -205,8 +244,8 @@ enum FileDownload {
             armored: signature, over: variants, signerPoints: signerPoints
         )
         switch outcome {
-        case .valid, .missing, .noVerifier: return outcome
-        case .invalid, .weakHash: throw FileDownloadError.contentKeySignatureInvalid
+        case .valid, .missing: return outcome
+        case .invalid, .weakHash, .noVerifier: throw FileDownloadError.contentKeySignatureInvalid
         }
     }
 
@@ -217,9 +256,10 @@ enum FileDownload {
     /// nodeKR)`, verified in crypto.go `decryptBlockIntoBuffer` with the
     /// SignatureEmail keyring + nodeKR); Nucleon F4.3 uploads signed the raw
     /// encrypted-block hash (FileUpload.blockSignaturePacket) — both
-    /// accepted. Missing EncSignature or foreign signer → not checked (the
-    /// C# SDK BlockDownloader does not verify blocks at all; the manifest
-    /// covers every block hash). Invalid, undecryptable or weak → throws.
+    /// accepted. Missing EncSignature → not checked (the C# SDK
+    /// BlockDownloader does not verify blocks at all; the manifest covers
+    /// every block hash). Invalid, undecryptable, weak or no verifier
+    /// (empty signer set — never a pass, see `trustedSigners`) → throws.
     static func verifyBlockSignature(
         _ encSignature: String?,
         index: Int,
@@ -242,8 +282,9 @@ enum FileDownload {
             signatureBodies: bodies, over: [plaintext, encryptedHash], signerPoints: check.signerPoints
         )
         switch outcome {
-        case .valid, .noVerifier: return
-        case .missing, .invalid, .weakHash: throw FileDownloadError.blockSignatureInvalid(index: index)
+        case .valid: return
+        case .missing, .invalid, .weakHash, .noVerifier:
+            throw FileDownloadError.blockSignatureInvalid(index: index)
         }
     }
 

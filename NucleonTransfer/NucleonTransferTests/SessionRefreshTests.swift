@@ -22,8 +22,14 @@ private final class FakeAuthAPI: SessionAuthAPI {
 
     private let state = Mutex(State())
     private let holdRefresh: Bool
+    /// Like `holdRefresh`, but the wait is a cancellable sleep: cancelling
+    /// the refresh task (replaceSession) ends it with CancellationError.
+    private let cancellableHold: Bool
 
-    init(holdRefresh: Bool = false) { self.holdRefresh = holdRefresh }
+    init(holdRefresh: Bool = false, cancellableHold: Bool = false) {
+        self.holdRefresh = holdRefresh
+        self.cancellableHold = cancellableHold
+    }
 
     var refreshCount: Int { state.withLock { $0.refreshes.count } }
     var refreshTokensSent: [String] { state.withLock { $0.refreshes.map(\.refreshToken) } }
@@ -43,7 +49,9 @@ private final class FakeAuthAPI: SessionAuthAPI {
             s.refreshes.append(body)
             return s.refreshes.count
         }
-        if holdRefresh {
+        if cancellableHold {
+            try await Task.sleep(for: .seconds(60))
+        } else if holdRefresh {
             await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
                 let resumeNow = state.withLock { s -> Bool in
                     if s.released { return true }
@@ -160,6 +168,76 @@ struct SessionRefreshTests {
 
         await #expect(throws: (any Error).self) { try await stale.value }
         #expect(await manager.credentials() == fresh)
+    }
+
+    @Test func opIsNotReplayedWithAnotherSessionsToken() async throws {
+        let api = FakeAuthAPI()
+        let manager = await signedInManager(api)
+        let seen = Mutex([String]())
+        let next = ProtonSession(uid: "uid2", accessToken: "new-access", refreshToken: "new-refresh")
+
+        await #expect(throws: ProtonAPIError.unauthorized) {
+            try await manager.withAuth { _, token in
+                seen.withLock { $0.append(token) }
+                if token == "access-0" {
+                    // Sign-out + a new session land before this 401.
+                    await manager.signOut()
+                    await manager.adopt(next)
+                    throw ProtonAPIError.unauthorized
+                }
+                return token
+            }
+        }
+        #expect(seen.withLock { $0 } == ["access-0"])
+        #expect(api.refreshCount == 0)
+        #expect(await manager.credentials() == next)
+    }
+
+    @Test func opIsNotReplayedAfterRefreshOfAReplacedSession() async throws {
+        let api = FakeAuthAPI(holdRefresh: true)
+        let manager = await signedInManager(api)
+        let seen = Mutex([String]())
+
+        let op = Task {
+            try await manager.withAuth { _, token in
+                seen.withLock { $0.append(token) }
+                guard token != "access-0" else { throw ProtonAPIError.unauthorized }
+                return token
+            }
+        }
+        await waitUntil { api.refreshCount == 1 }
+        await manager.adopt(ProtonSession(uid: "uid2", accessToken: "new-access", refreshToken: "new-refresh"))
+        api.release()
+
+        await #expect(throws: ProtonAPIError.unauthorized) { try await op.value }
+        #expect(seen.withLock { $0 } == ["access-0"])
+    }
+
+    @Test func refreshCancelledBySessionReplacementIsUnauthorized() async throws {
+        let api = FakeAuthAPI(cancellableHold: true)
+        let manager = await signedInManager(api)
+
+        let starter = Task { try await manager.refresh() }
+        await waitUntil { api.refreshCount == 1 }
+        let joiner = Task { try await manager.refresh() }
+        try await Task.sleep(for: .milliseconds(20))   // let the joiner attach
+        await manager.adopt(ProtonSession(uid: "uid2", accessToken: "new-access", refreshToken: "new-refresh"))
+
+        await #expect(throws: ProtonAPIError.unauthorized) { try await starter.value }
+        await #expect(throws: ProtonAPIError.unauthorized) { try await joiner.value }
+        #expect(api.refreshCount == 1)
+    }
+
+    @Test func callerCancellationStillSurfacesAsCancellation() async throws {
+        let api = FakeAuthAPI(cancellableHold: true)
+        let manager = await signedInManager(api)
+
+        let caller = Task { try await manager.refresh() }
+        await waitUntil { api.refreshCount == 1 }
+        caller.cancel()   // the caller's own task…
+        await manager.adopt(ProtonSession(uid: "uid2", accessToken: "new-access", refreshToken: "new-refresh"))
+
+        await #expect(throws: CancellationError.self) { try await caller.value }
     }
 
     @Test func withAuthSignedOutThrowsUnauthorized() async {

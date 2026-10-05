@@ -81,6 +81,8 @@ enum UserFacingError: Sendable {
                 return "Download stopped: this file's revision is not signed, so its author can't be verified. Nothing was saved."
             case .manifestSignatureInvalid:
                 return "Download stopped: the file's signature could not be verified — its contents may have been altered. Nothing was saved."
+            case .manifestSignatureUnverifiable:
+                return "Download stopped: the file's author couldn't be verified — it is signed by an address outside your account. Nothing was saved."
             case .contentKeySignatureInvalid:
                 return "Download stopped: the file key's signature is invalid — the file may have been tampered with. Nothing was saved."
             case let .blockSignatureInvalid(index):
