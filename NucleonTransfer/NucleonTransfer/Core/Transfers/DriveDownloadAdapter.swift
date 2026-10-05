@@ -14,7 +14,9 @@
 //   DownloadPlacement.write (reserved conflict-free name, unique temp file,
 //   exclusive rename — never replaces an existing item, F8.2-R5).
 // Folders download recursively (children listing + name decrypt), preserving
-// structure; files within one folder download with bounded parallelism.
+// structure — including the folder itself: "Vacation" lands as
+// <destination>/Vacation/… ("Vacation (1)" if that exists, F8.2-R6); files
+// within one folder download with bounded parallelism.
 // Cancellation (F8.2-R5): checked between blocks and between files; a
 // cancelled file never leaves its temp file behind.
 
@@ -190,9 +192,11 @@ actor DriveDownloadAdapter {
 
     // MARK: - recursive folder
 
-    /// Downloads a remote FOLDER tree into `destination` (created if needed),
-    /// preserving structure. Returns downloaded file URLs.
-    /// `linkID` may be a file (single download) or folder (recursive).
+    /// Downloads a remote FOLDER tree into a NEW folder named after it inside
+    /// `destination` (F8.2-R6: never merged into an existing one), preserving
+    /// structure. Returns downloaded file URLs.
+    /// `linkID` may be a file (single download, straight into
+    /// `destination`) or folder (recursive).
     func downloadTree(
         shareID: String,
         linkID: String,
@@ -217,8 +221,17 @@ actor DriveDownloadAdapter {
             }
             return [dest]
         }
+        let parentKeys = try await parentKeysFor(shareID: shareID, link: link)
+        let name = (try? DecryptChain.decryptName(
+            link, parentCandidates: parentKeys.compactMap(\.candidate)
+        )) ?? link.linkID
+        // Sanitized + contained in `destination` like every other remote
+        // name (safeSubdirectory inside DownloadPlacement).
+        let top = try await placement.makeTopLevelDirectory(
+            in: destination, remoteName: name, fallback: link.linkID
+        )
         return try await downloadFolder(
-            shareID: shareID, folderLinkID: linkID, localDir: destination,
+            shareID: shareID, folderLinkID: linkID, localDir: top,
             root: destination, progress: progress
         )
     }

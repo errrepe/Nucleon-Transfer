@@ -109,6 +109,65 @@ struct DownloadPlacementTests {
         #expect(SafeFilename.contained(escape, in: dir))
     }
 
+    // MARK: - top-level folder (F8.2-R6)
+
+    @Test func folderDownloadCreatesItsOwnFolder() async throws {
+        let dest = try tempDir("ntr6")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        try Data("user".utf8).write(to: dest.appendingPathComponent("notes.txt"))
+        let placement = DownloadPlacement()
+        // Mirrors DriveDownloadAdapter.downloadTree for a folder link.
+        let top = try await placement.makeTopLevelDirectory(in: dest, remoteName: "Vacation", fallback: "LINKID")
+        #expect(top.lastPathComponent == "Vacation")
+        #expect(top.deletingLastPathComponent().standardizedFileURL.path
+            == dest.standardizedFileURL.path)
+        let photo = try await placement.write(
+            Data("jpg".utf8), in: top, remoteName: "beach.jpg", fallback: "F", root: dest
+        )
+        #expect(photo.path.hasSuffix("/Vacation/beach.jpg"))
+        // Children went into Vacation/, not next to the user's files.
+        #expect(try listing(dest) == ["Vacation", "notes.txt"])
+        #expect(try listing(top) == ["beach.jpg"])
+    }
+
+    @Test func folderDownloadNeverMergesIntoExistingFolder() async throws {
+        let dest = try tempDir("ntr6m")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let mine = dest.appendingPathComponent("Vacation", isDirectory: true)
+        try FileManager.default.createDirectory(at: mine, withIntermediateDirectories: false)
+        try Data("keep".utf8).write(to: mine.appendingPathComponent("beach.jpg"))
+        // A FILE with the folder's name (other case) also blocks the name.
+        try Data("f".utf8).write(to: dest.appendingPathComponent("VACATION (1)"))
+        let placement = DownloadPlacement()
+        let top = try await placement.makeTopLevelDirectory(in: dest, remoteName: "Vacation", fallback: "LINKID")
+        #expect(top.lastPathComponent == "Vacation (2)" || top.lastPathComponent == "Vacation (1)")
+        #expect(try listing(top).isEmpty)
+        #expect(try listing(mine) == ["beach.jpg"])
+        #expect(try Data(contentsOf: mine.appendingPathComponent("beach.jpg")) == Data("keep".utf8))
+        // Second download of the same folder in the same batch: new folder again.
+        let again = try await placement.makeTopLevelDirectory(in: dest, remoteName: "vacation", fallback: "LINKID")
+        #expect(again != top)
+        #expect(again.lastPathComponent.hasPrefix("vacation ("))
+    }
+
+    @Test func topLevelFolderNameIsSanitizedAndContained() async throws {
+        let parent = try tempDir("ntr6s")
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let dest = parent.appendingPathComponent("chosen", isDirectory: true)
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: false)
+        let placement = DownloadPlacement()
+        let dots = try await placement.makeTopLevelDirectory(in: dest, remoteName: "..", fallback: "LINKID")
+        #expect(dots.lastPathComponent == "LINKID")
+        let traversal = try await placement.makeTopLevelDirectory(
+            in: dest, remoteName: "../../Library", fallback: "LINKID"
+        )
+        #expect(traversal.lastPathComponent == ".._.._Library")
+        for url in [dots, traversal] {
+            #expect(SafeFilename.contained(url, in: dest))
+        }
+        #expect(try listing(parent) == ["chosen"])
+    }
+
     // MARK: - non-destructive move
 
     @Test func moveExclusiveRefusesExistingDestination() throws {

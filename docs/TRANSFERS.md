@@ -93,8 +93,27 @@
 ### 2.2 Espelho da árvore
 
 - Lista recursiva remota (`GET /drive/v4/nodes/{id}/children` + eventos) → constrói árvore.
-- Cria diretórios locais primeiro (`FileManager.createDirectory(withIntermediateDirectories:true)`).
-- Escreve via arquivo temporário `*.nucleon-part` → `rename` atômico ao verificar.
+- Pasta de topo preservada (F8.2-R6): baixar a pasta remota "Vacation" para o
+  destino escolhido cria `<destino>/Vacation/…`; se "Vacation" já existe
+  localmente, vira "Vacation (1)" — nunca mescla numa pasta do usuário. O nome
+  passa por `safeSubdirectory` (sanitize + contenção, raiz = destino escolhido).
+  Arquivo único continua indo direto para o destino.
+- Cria diretórios locais primeiro, de forma exclusiva (`createDirectory` sem
+  intermediários). Nomes (arquivos e pastas) são reservados no ator
+  `DownloadPlacement` (F8.2-R5) com chave case-folded + NFC por diretório:
+  irmãos remotos que só diferem por caixa ou normalização (`A.txt` / `a.txt`,
+  `Docs` / `docs`) ganham nomes locais distintos (`a (1).txt`, `docs (1)`) no
+  APFS case-insensitive, em vez de um apagar o outro ou as pastas mesclarem.
+- Escreve via arquivo temporário único `.<nome>.<uuid>.nucleon-part` → `rename`
+  EXCLUSIVO (`renamex_np(RENAME_EXCL)`; `link`+`unlink` em volumes sem
+  suporte). Nunca há `removeItem` do destino: se o nome existir no momento do
+  move, usa o próximo sufixo livre " (n)" e tenta de novo.
+- Cancelamento (F8.2-R5): cada download tem uma Task em `DownloadCoordinator`
+  (`cancel(id)` pelo botão/menu de contexto da linha, `cancelAll()` no
+  sign-out antes de descartar as chaves). Checado entre blocos e entre
+  arquivos; o `.nucleon-part` é removido e o registro fica `cancelled` (não
+  `failed`). Arquivos já concluídos de uma pasta cancelada permanecem.
+  Progresso que chega depois do fim é ignorado.
 - Downloads em voo de antes do rename (RN1, 2026-10-03) podem ter deixado
   órfãos arquivos `*-part` com o prefixo antigo ao lado do destino: um retry
   no mesmo destino sobrescreve o órfão, e os demais são seguros de apagar.

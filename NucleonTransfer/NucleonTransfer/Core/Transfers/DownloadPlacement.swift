@@ -106,6 +106,14 @@ actor DownloadPlacement {
         throw FileDownloadError.destinationUnavailable
     }
 
+    /// The local folder for a downloaded remote FOLDER (F8.2-R6): created
+    /// inside the chosen `destination` (which is also the containment
+    /// root), " (n)"-suffixed if that name exists — the download never
+    /// merges into a folder the user already has.
+    func makeTopLevelDirectory(in destination: URL, remoteName: String, fallback: String) throws -> URL {
+        try makeDirectory(in: destination, remoteName: remoteName, fallback: fallback, root: destination)
+    }
+
     // MARK: - bookkeeping
 
     private func isTaken(_ url: URL) -> Bool {
