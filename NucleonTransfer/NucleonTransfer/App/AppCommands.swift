@@ -135,6 +135,23 @@ struct AppCommands: Commands {
             }
             .disabled(!canSignOut)
         }
+
+        // Help menu (F8.4-U7) — replaces the default "Nucleon Transfer
+        // Help" item (there is no Help Book); every item opens the GitHub
+        // repository in the browser.
+        CommandGroup(replacing: .help) {
+            Button("Nucleon Transfer Help") { open(HelpLinks.readme) }
+            Button("Known Limitations") { open(HelpLinks.knownLimitations) }
+            Divider()
+            Button("Report an Issue…") { open(HelpLinks.newIssue) }
+            Button("Privacy & Security") { open(HelpLinks.security) }
+        }
+    }
+
+    /// Opens a help link in the default browser (no-op on a nil URL).
+    private func open(_ url: URL?) {
+        guard let url else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// Write-capable root on screen (not Photos, not signed out).
