@@ -376,9 +376,6 @@ final class BrowserModel {
         await load(current, force: true)
     }
 
-    /// Post-operation consistency (uploads/deletes in S2.3): flags every
-    /// touched parent as stale, and refetches only if one of them is the
-    /// folder on screen. Other stale folders lazily refresh on next visit.
     /// Set once the container has shown this model — a later appearance
     /// is a return to this root from another one (MainView's cache).
     @ObservationIgnored private(set) var hasAppeared = false
@@ -392,11 +389,12 @@ final class BrowserModel {
         parkedPath = path
     }
 
-    /// The container came on screen. On a return to this root: pick up a
-    /// sort changed in another root (the preference is app-wide) and
-    /// revalidate everything — remote changes published while the root
-    /// was off screen were never seen (`observeRemoteChanges` only reads
-    /// the latest set). Cached rows stay up while the reload runs.
+    /// The container came on screen. On a return to this root: put back
+    /// the folder chain, pick up a sort changed in another root (the
+    /// preference is app-wide) and revalidate everything — the cache may
+    /// be minutes old and changes made elsewhere (the web app, another
+    /// device) are never published to `remoteChanged`. Cached rows stay up
+    /// while the reload runs.
     func reappear(savedSortOrder: [KeyPathComparator<DriveItem>]) {
         defer { hasAppeared = true }
         guard hasAppeared else { return }
@@ -412,6 +410,9 @@ final class BrowserModel {
         Task { await load(current) }
     }
 
+    /// Post-operation consistency (uploads/deletes in S2.3): flags every
+    /// touched parent as stale, and refetches only if one of them is the
+    /// folder on screen. Other stale folders lazily refresh on next visit.
     func markStale(parentLinkIDs: Set<String>) {
         for linkID in parentLinkIDs {
             folders[linkID]?.isStale = true // never-visited folders: nothing cached
