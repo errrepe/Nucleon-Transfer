@@ -87,6 +87,8 @@ enum UserFacingError: Sendable {
                 return "Download stopped: the file key's signature is invalid — the file may have been tampered with. Nothing was saved."
             case let .blockSignatureInvalid(index):
                 return "Download stopped: block \(index) failed signature verification — the file may have been tampered with. Nothing was saved."
+            case .destinationUnavailable:
+                return "Download failed: no free file name in the chosen folder. Choose another folder and retry."
             }
         }
         if let chain = error as? DecryptChainError {

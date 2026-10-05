@@ -44,6 +44,8 @@ enum FileDownloadError: Error, Sendable, Equatable {
     case manifestSignatureUnverifiable
     /// A block's EncSignature does not verify (F8.1-S2).
     case blockSignatureInvalid(index: Int)
+    /// No free local name after many " (n)" attempts (F8.2-R5).
+    case destinationUnavailable
 }
 
 enum FileDownload {
@@ -290,37 +292,58 @@ enum FileDownload {
 
     // MARK: - destination planning (pure Foundation)
 
+    /// Existence without following a final symlink: a dangling link still
+    /// occupies its name (an exclusive rename onto it fails).
+    static func itemExists(at url: URL) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil
+    }
+
+    /// `name (n)` — extension-aware for files ("a.txt" → "a (1).txt"),
+    /// plain for folders ("v1.2" → "v1.2 (1)"); kept within 255 bytes.
+    static func suffixedName(_ name: String, n: Int, isDirectory: Bool = false) -> String {
+        let suffix = " (\(n))"
+        let base = SafeFilename.capped(
+            name, maxBytes: SafeFilename.maxBytes - suffix.utf8.count
+        )
+        if isDirectory { return base + suffix }
+        let stem = (base as NSString).deletingPathExtension
+        let ext = (base as NSString).pathExtension
+        return ext.isEmpty ? "\(stem)\(suffix)" : "\(stem)\(suffix).\(ext)"
+    }
+
     /// Best-effort conflict-free destination: `name`, then `name (1)`,
     /// `name (2)`, … (matches the upload-side convention; never overwrites
     /// silently). Extension-aware: "a.txt" → "a (1).txt".
     /// `name` must already be a single safe component (SafeFilename).
-    static func uniqueDestination(in directory: URL, name: String) -> URL {
-        let fm = FileManager.default
-        let candidate = directory.appendingPathComponent(name, isDirectory: false)
-        guard fm.fileExists(atPath: candidate.path) else { return candidate }
+    /// `isTaken` defaults to "exists on disk"; DownloadPlacement adds its
+    /// in-flight reservations (F8.2-R5). Check-then-act: the final move is
+    /// exclusive (`moveExclusive`), so a lost race never overwrites.
+    static func uniqueDestination(
+        in directory: URL,
+        name: String,
+        isDirectory: Bool = false,
+        isTaken: (URL) -> Bool = { FileDownload.itemExists(at: $0) }
+    ) -> URL {
+        let candidate = directory.appendingPathComponent(name, isDirectory: isDirectory)
+        guard isTaken(candidate) else { return candidate }
         for n in 1...1000 {
-            // Keep the suffixed name within the 255-byte limit.
-            let suffix = " (\(n))"
-            let base = SafeFilename.capped(
-                name, maxBytes: SafeFilename.maxBytes - suffix.utf8.count
+            let url = directory.appendingPathComponent(
+                suffixedName(name, n: n, isDirectory: isDirectory), isDirectory: isDirectory
             )
-            let stem = (base as NSString).deletingPathExtension
-            let ext = (base as NSString).pathExtension
-            let suffixed = ext.isEmpty ? "\(stem)\(suffix)" : "\(stem)\(suffix).\(ext)"
-            let url = directory.appendingPathComponent(suffixed, isDirectory: false)
-            guard fm.fileExists(atPath: url.path) else { return url }
+            guard isTaken(url) else { return url }
         }
-        return candidate // unreachable in practice; never overwrite loop
+        return candidate // unreachable in practice; the exclusive move still refuses
     }
 
     /// Conflict-free FILE destination for a remote (untrusted) name:
     /// sanitized via SafeFilename, then verified to stay inside `root` (the
     /// folder the user chose). Throws `.unsafeDestination` otherwise.
     static func safeFileDestination(
-        in directory: URL, remoteName: String, fallback: String, root: URL
+        in directory: URL, remoteName: String, fallback: String, root: URL,
+        isTaken: (URL) -> Bool = { FileDownload.itemExists(at: $0) }
     ) throws -> URL {
         let name = SafeFilename.sanitize(remoteName, fallback: fallback)
-        let dest = uniqueDestination(in: directory, name: name)
+        let dest = uniqueDestination(in: directory, name: name, isTaken: isTaken)
         guard SafeFilename.contained(dest, in: root) else {
             throw FileDownloadError.unsafeDestination
         }
@@ -328,31 +351,86 @@ enum FileDownload {
     }
 
     /// Local subfolder for a remote (untrusted) folder name, same checks as
-    /// safeFileDestination. Folders merge (no " (n)" suffix), as before.
+    /// safeFileDestination. `isTaken == nil` merges into an existing folder
+    /// of that name; otherwise the first free `name (n)` is returned
+    /// (DownloadPlacement: case-only siblings and the top-level folder never
+    /// merge, F8.2-R5/R6).
     static func safeSubdirectory(
-        in directory: URL, remoteName: String, fallback: String, root: URL
+        in directory: URL, remoteName: String, fallback: String, root: URL,
+        isTaken: ((URL) -> Bool)? = nil
     ) throws -> URL {
         let name = SafeFilename.sanitize(remoteName, fallback: fallback)
-        let dest = directory.appendingPathComponent(name, isDirectory: true)
+        let dest = isTaken.map {
+            uniqueDestination(in: directory, name: name, isDirectory: true, isTaken: $0)
+        } ?? directory.appendingPathComponent(name, isDirectory: true)
         guard SafeFilename.contained(dest, in: root) else {
             throw FileDownloadError.unsafeDestination
         }
         return dest
     }
 
-    /// Atomic write: temp `*.nucleon-part` in the destination directory +
-    /// rename (TRANSFERS.md §2.2). Creates intermediate directories.
-    static func atomicWrite(_ data: Data, to destination: URL) throws {
+    /// Suffix of every temp file this app writes next to a download.
+    static let partSuffix = ".nucleon-part"
+
+    /// Writes `data` to a UNIQUE hidden temp file in `directory`
+    /// (`.<name>.<uuid>.nucleon-part`): two downloads racing for the same
+    /// (or a case-variant) name never share a temp file. The name part is
+    /// capped so the whole component stays within 255 bytes.
+    static func writePart(_ data: Data, in directory: URL, name: String) throws -> URL {
+        let overhead = 1 + 1 + 36 + partSuffix.utf8.count // "." + "." + UUID
+        let stem = SafeFilename.capped(name, maxBytes: SafeFilename.maxBytes - overhead)
+        let part = directory.appendingPathComponent(
+            ".\(stem).\(UUID().uuidString)\(partSuffix)", isDirectory: false
+        )
+        try data.write(to: part, options: .withoutOverwriting)
+        return part
+    }
+
+    /// Renames `source` to `destination` only if nothing exists there
+    /// (APFS `renamex_np(RENAME_EXCL)`; `link`+`unlink` on volumes without
+    /// it). Returns false when the destination is taken — the caller picks
+    /// another name. NEVER removes or replaces an existing item.
+    static func moveExclusive(_ source: URL, to destination: URL) throws -> Bool {
+        let (rc, err): (Int32, Int32) = source.withUnsafeFileSystemRepresentation { src in
+            destination.withUnsafeFileSystemRepresentation { dst in
+                guard let src, let dst else { return (-1, EINVAL) }
+                if renamex_np(src, dst, UInt32(RENAME_EXCL)) == 0 { return (0, 0) }
+                let renameErr = errno
+                guard renameErr == ENOTSUP || renameErr == EINVAL else { return (-1, renameErr) }
+                // No RENAME_EXCL here: a hard link is exclusive too.
+                guard link(src, dst) == 0 else { return (-1, errno) }
+                unlink(src)
+                return (0, 0)
+            }
+        }
+        if rc == 0 { return true }
+        if err == EEXIST { return false }
+        throw POSIXError(POSIXErrorCode(rawValue: err) ?? .EIO)
+    }
+
+    /// Atomic, non-destructive write: unique temp `*.nucleon-part` in the
+    /// destination directory, then an EXCLUSIVE rename (TRANSFERS.md §2.2).
+    /// If `destination` exists at move time the next free `name (n)` is
+    /// used — an existing file is never removed (F8.2-R5). Creates
+    /// intermediate directories. Returns the final URL.
+    @discardableResult
+    static func atomicWrite(_ data: Data, to destination: URL) throws -> URL {
         let dir = destination.deletingLastPathComponent()
         try FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true
         )
-        let part = dir
-            .appendingPathComponent(destination.lastPathComponent + ".nucleon-part")
-        try data.write(to: part, options: .atomic)
-        if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
+        let name = destination.lastPathComponent
+        let part = try writePart(data, in: dir, name: name)
+        do {
+            var candidate = destination
+            for _ in 0..<1000 {
+                if try moveExclusive(part, to: candidate) { return candidate }
+                candidate = uniqueDestination(in: dir, name: name)
+            }
+            throw FileDownloadError.destinationUnavailable
+        } catch {
+            try? FileManager.default.removeItem(at: part)
+            throw error
         }
-        try FileManager.default.moveItem(at: part, to: destination)
     }
 }

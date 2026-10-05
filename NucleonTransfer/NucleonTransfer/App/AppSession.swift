@@ -50,8 +50,9 @@ final class AppSession {
     /// Protocol-typed so DEBUG builds can swap in the offline demo fixture.
     private(set) var listing: (any DriveListingProviding)?
     /// Browser download orchestrator (S2.3) — created alongside the
-    /// resolver, dropped on sign-out. Holds no state of its own beyond
-    /// in-flight dedup; all progress lands in `activity`.
+    /// resolver, cancelled + dropped on sign-out. Holds no state of its own
+    /// beyond in-flight dedup and per-download Task handles (F8.2-R5); all
+    /// progress lands in `activity`.
     private(set) var downloads: DownloadCoordinator?
     /// Folder write ops (create/trash, S2.3) — created alongside the
     /// resolver, dropped on sign-out. nil ⇒ the write UI stays disabled.
@@ -142,10 +143,15 @@ final class AppSession {
         await signOut()
     }
 
-    /// Sign-out order (S0.3): pause + detach the upload queue BEFORE dropping
-    /// auth, revoke the session server-side (best-effort), wipe key seeds,
-    /// then reset UI-visible state. `reason` lands on the login screen.
+    /// Sign-out order (S0.3): cancel in-flight downloads and pause + detach
+    /// the upload queue BEFORE dropping auth, revoke the session
+    /// server-side (best-effort), wipe key seeds, then reset UI-visible
+    /// state. `reason` lands on the login screen.
     func signOut(reason: String? = nil) async {
+        // F8.2-R5: download Tasks hold the coordinator, adapter and their
+        // address-key copies — stop them (records land as "Cancelled")
+        // before the keys are dropped below.
+        await downloads?.cancelAll()
         await queue.pauseAll()
         await queue.setUploader(nil)
         await uploads?.stop()

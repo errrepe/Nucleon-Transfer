@@ -16,6 +16,7 @@ struct TransfersPanel: View {
         var retry: (UUID) -> Void = { _ in }
         var removeUpload: (UUID) -> Void = { _ in }
         var removeDownload: (UUID) -> Void = { _ in }
+        var cancelDownload: (UUID) -> Void = { _ in }
         var revealDownload: (UUID) -> Void = { _ in }
         var pauseAll: () -> Void = {}
         var retryAllFailed: () -> Void = {}
@@ -122,10 +123,9 @@ struct TransfersPanel: View {
     }
 
     /// Per-state action set for a row — the same shape the retired queue
-    /// view's `actions(_:)` had. Downloads have no pause/cancel/retry API
-    /// (DownloadCoordinator is a sequential fire-and-report loop), so an
-    /// in-flight download shows only its bar, a done one gets "Show in
-    /// Finder" and a failed one can only be dismissed.
+    /// view's `actions(_:)` had. Downloads have no pause/retry API: an
+    /// in-flight download can be cancelled (F8.2-R5), a done one gets
+    /// "Show in Finder" and a failed/cancelled one can only be dismissed.
     private func actions(for item: TransferDisplayItem) -> TransferRowActions {
         guard let uuid = UUID(uuidString: item.id) else { return TransferRowActions() }
         switch item.direction {
@@ -160,13 +160,15 @@ struct TransfersPanel: View {
             }
             switch record.state {
             case .downloading:
-                return TransferRowActions()
+                return TransferRowActions(
+                    cancel: { handlers.cancelDownload(uuid) }
+                )
             case .done:
                 guard revealURLs[uuid] != nil else { return TransferRowActions() }
                 return TransferRowActions(
                     reveal: { handlers.revealDownload(uuid) }
                 )
-            case .failed:
+            case .failed, .cancelled:
                 return TransferRowActions(
                     remove: { handlers.removeDownload(uuid) }
                 )

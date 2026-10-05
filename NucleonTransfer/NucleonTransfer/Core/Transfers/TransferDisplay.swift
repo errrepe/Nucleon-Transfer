@@ -121,7 +121,7 @@ enum TransferDisplay {
     static func section(of record: DownloadRecord) -> TransferDisplaySectionKind {
         switch record.state {
         case .downloading: return .active
-        case .failed: return .failed
+        case .failed, .cancelled: return .failed
         case .done: return .completed
         }
     }
@@ -195,6 +195,8 @@ enum TransferDisplay {
             // Store already maps errors via UserFacingError.message(for:);
             // the message(forMessage:) pass upgrades any raw string too.
             return UserFacingError.message(forMessage: record.errorMessage ?? "Download failed")
+        case .cancelled:
+            return "Cancelled"
         }
     }
 

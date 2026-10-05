@@ -92,6 +92,9 @@ struct TransfersToolbarButton: View {
                 removeDownload: { [session] id in
                     session.activity.removeDownload(id: id)
                 },
+                cancelDownload: { [session] id in
+                    session.downloads?.cancel(id)
+                },
                 revealDownload: { [session] id in
                     // revealURLs is memory-only: the URL exists for this
                     // process only, never persisted — safe to hand to

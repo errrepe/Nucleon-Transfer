@@ -10,6 +10,8 @@ enum DownloadState: String, Codable, Sendable, Equatable {
     case downloading
     case done
     case failed
+    /// Stopped by the user or by sign-out (F8.2-R5) — not an error.
+    case cancelled
 }
 
 enum DownloadKind: String, Codable, Sendable, Equatable {
@@ -65,6 +67,7 @@ struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
         case .downloading: return "Downloading"
         case .done: return "Done"
         case .failed: return "Failed"
+        case .cancelled: return "Cancelled"
         }
     }
 
@@ -80,6 +83,65 @@ struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
             return "Downloaded" + (destinationName.map { " → \($0)" } ?? "")
         case .failed:
             return errorMessage ?? "Download failed"
+        case .cancelled:
+            return "Download cancelled"
         }
+    }
+
+    // MARK: - transitions (F8.2-R5)
+    // Only an in-flight record changes: done / failed / cancelled are
+    // terminal, so a progress hop or a completion that arrives late (after
+    // a cancel, or after the record finished) can't put it back in flight.
+    // Each returns whether the record changed.
+
+    @discardableResult
+    mutating func applyProgress(_ fraction: Double) -> Bool {
+        guard state == .downloading else { return false }
+        progress = min(max(fraction, 0), 1)
+        return true
+    }
+
+    @discardableResult
+    mutating func finish(fileCount: Int, destinationName: String?, at date: Date = Date()) -> Bool {
+        guard state == .downloading else { return false }
+        state = .done
+        self.fileCount = fileCount
+        if let destinationName { self.destinationName = destinationName }
+        progress = nil
+        errorMessage = nil
+        updatedAt = date
+        return true
+    }
+
+    @discardableResult
+    mutating func fail(message: String, at date: Date = Date()) -> Bool {
+        guard state == .downloading else { return false }
+        state = .failed
+        progress = nil
+        errorMessage = message
+        updatedAt = date
+        return true
+    }
+
+    @discardableResult
+    mutating func cancel(at date: Date = Date()) -> Bool {
+        guard state == .downloading else { return false }
+        state = .cancelled
+        progress = nil
+        errorMessage = nil
+        updatedAt = date
+        return true
+    }
+
+    /// True for errors that mean "the task was cancelled", not a failure:
+    /// Swift CancellationError and URLSession's cancelled code (bare or
+    /// wrapped by APIClient as `.transport`).
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let api = error as? ProtonAPIError, case let .transport(underlying) = api {
+            return isCancellation(underlying)
+        }
+        let ns = error as NSError
+        return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
     }
 }
