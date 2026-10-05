@@ -16,6 +16,12 @@ struct DebugCommands: Commands {
             Button(Self.checkTitle) {
                 Self.showSavedSignInCheck()
             }
+            // Flips the app into the "Proton refused uploads (2000)" state
+            // without a network round-trip — reproduces that UI change in
+            // Demo Mode.
+            Button("Simulate Uploads Blocked") {
+                DebugOverrides.shared.uploadsBlocked.toggle()
+            }
         }
         #else
         EmptyCommands()
@@ -24,6 +30,13 @@ struct DebugCommands: Commands {
 }
 
 #if DEBUG
+/// Runtime switches for the Debug menu (DEBUG builds only).
+@MainActor @Observable
+final class DebugOverrides {
+    static let shared = DebugOverrides()
+    var uploadsBlocked = false
+}
+
 extension DebugCommands {
     private static let menuTitle = "Debug"
     private static let checkTitle = "Check Saved Sign-In"

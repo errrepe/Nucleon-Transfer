@@ -118,6 +118,7 @@ final class BrowserModel {
     var uploadsBlocked: Bool {
         #if DEBUG
         if let previewUploadsBlocked { return previewUploadsBlocked }
+        if DebugOverrides.shared.uploadsBlocked { return true }
         #endif
         return session.uploads?.uploadsBlocked ?? false
     }

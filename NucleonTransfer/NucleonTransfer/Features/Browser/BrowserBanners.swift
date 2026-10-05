@@ -1,6 +1,6 @@
 // Nucleon Transfer — banners above the folder table (F8.4-U1/U3).
-// One thin strip per condition, stacked in FolderView's top safe-area
-// inset (the Photos read-only pattern): Photos read-only, uploads blocked
+// One thin strip per condition, stacked above FolderView's table (the
+// Photos read-only pattern): Photos read-only, uploads blocked
 // by Proton (code 2000, dismissible, Learn More → README), and "Couldn't
 // refresh" when a reload failed but earlier rows are still on screen.
 // System materials only; no custom glass on content.
@@ -46,13 +46,18 @@ struct UploadsBlockedBanner: View {
 
     var body: some View {
         BannerStrip {
+            // No vertical fixedSize: probed at a narrow width it reported a
+            // height taller than the window, and the whole window content
+            // was pushed up under the toolbar (live check). The label gets
+            // the width first and wraps to at most three lines.
             Label {
                 Text(UploadsBlockedCopy.message)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1...3)
             } icon: {
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundStyle(.yellow)
             }
+            .layoutPriority(1)
             Spacer(minLength: 8)
             if let url = UploadsBlockedCopy.learnMoreURL {
                 Link("Learn More", destination: url)

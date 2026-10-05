@@ -31,8 +31,18 @@ struct TransfersToolbarButton: View {
 
     var body: some View {
         @Bindable var activity = session.activity
-        Button("Transfers", systemImage: "arrow.up.arrow.down") {
+        Button {
             activity.presentTransfers.toggle()
+        } label: {
+            // The badge rides on the ICON, not the button: macOS 26 clips
+            // toolbar items to their glass capsule, and a badge hung off
+            // the button's corner was cut in half (live check).
+            Label {
+                Text("Transfers")
+            } icon: {
+                Image(systemName: "arrow.up.arrow.down")
+                    .overlay(alignment: .topTrailing) { badge }
+            }
         }
         // M4: match the View-menu wording ("Show Transfers") and say
         // what the button does; the active/failed count rides along. The
@@ -45,7 +55,6 @@ struct TransfersToolbarButton: View {
             badgeState.summary.map { String(localized: "Transfers, \($0)") }
                 ?? String(localized: "Transfers")
         )
-        .overlay(alignment: .topTrailing) { badge }
         .popover(isPresented: $activity.presentTransfers, arrowEdge: .bottom) {
             // TransfersPanel takes pure inputs today; the injection is a
             // safety net for any future panel child that reads the
@@ -91,7 +100,7 @@ struct TransfersToolbarButton: View {
             .foregroundStyle(.white)
             .frame(width: 9, height: 9)
             .background(.red, in: Circle())
-            .offset(x: 1, y: -7)
+            .offset(x: -3, y: -3)
             .accessibilityHidden(true)
     }
 
@@ -105,7 +114,7 @@ struct TransfersToolbarButton: View {
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(fill, in: Capsule())
-            .offset(x: 6, y: -4)
+            .offset(x: 7, y: -6)
             .accessibilityHidden(true)
     }
 
