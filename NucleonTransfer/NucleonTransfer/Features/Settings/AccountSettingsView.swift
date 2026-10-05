@@ -7,6 +7,10 @@
 // confirmation: both Keychain items + the remembered username go, the
 // current session keeps running. The Touch ID toggle is disabled (with
 // the reason) while keep-signed-in is off or this Mac can't use Touch ID.
+// Polish pass 3: while the switch is applied an inline spinner says what
+// is happening (turning it off waits on the Touch ID prompt), and the
+// help text crossfades as its reason changes — opacity only, since the
+// Settings window resizes to fit (AppKit owns that frame).
 import SwiftUI
 
 struct AccountSettingsView: View {
@@ -19,6 +23,8 @@ struct AccountSettingsView: View {
     @State private var biometryAvailable: Bool
     @State private var confirmingForget = false
     @State private var isApplying = false
+    /// The value being applied while `isApplying` — picks the inline copy.
+    @State private var applyingRequired = false
     /// Shown under the buttons after "Forget This Mac" ran.
     @State private var forgotten = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -46,11 +52,27 @@ struct AccountSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Toggle("Require Touch ID", isOn: touchIDBinding)
                     .disabled(!keepSignedIn || !biometryAvailable || isBusy || isApplying)
+                if isApplying {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        // Off needs the fingerprint (vault unseal); on
+                        // re-seals without a prompt.
+                        Text(applyingRequired ? "Saving…" : "Waiting for Touch ID…")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityElement(children: .combine)
+                    .transition(.opacity)
+                }
                 Text(touchIDHelp)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .contentTransition(.opacity)
             }
+            .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: isApplying)
+            .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: keepSignedIn)
             Section {
                 LabeledContent("Saved sign-in") {
                     Button("Forget This Mac…", role: .destructive) {
@@ -100,6 +122,7 @@ struct AccountSettingsView: View {
             get: { requireTouchID },
             set: { required in
                 guard required != requireTouchID, !isApplying else { return }
+                applyingRequired = required
                 isApplying = true
                 Task {
                     let applied = await session.setRequireTouchID(required)

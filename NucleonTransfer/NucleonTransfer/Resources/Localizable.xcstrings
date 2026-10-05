@@ -2101,6 +2101,17 @@
         }
       }
     },
+    "Saving…" : {
+      "comment" : "Settings › Account: inline status while Require Touch ID is being turned on",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvando…"
+          }
+        }
+      }
+    },
     "See folders you viewed next" : {
       "comment" : "Forward button tooltip",
       "localizations" : {
@@ -2931,6 +2942,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Versão %@"
+          }
+        }
+      }
+    },
+    "Waiting for Touch ID…" : {
+      "comment" : "Settings › Account: inline status while the Touch ID prompt to turn it off is up",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aguardando o Touch ID…"
           }
         }
       }
