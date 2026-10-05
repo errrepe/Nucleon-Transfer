@@ -31,6 +31,16 @@ final class AppSession {
     private(set) var account: Account?
     /// Error or sign-out reason shown on the login screen.
     var loginError: String?
+    /// F8.2-R7: the TOTP code is being checked — TwoFactorView shows
+    /// "Verifying…" inline; the phase only moves to `.unlocking` once
+    /// Proton accepted the code.
+    private(set) var isVerifyingTwoFactor = false
+    /// F8.2-R7: inline error on the 2FA prompt (wrong code, network) —
+    /// the user stays on the prompt with the session and password intact.
+    private(set) var twoFactorError: String?
+    /// Proton user ID of the signed-in account — scopes the upload queue
+    /// (F8.2-R7 / B12). nil while signed out.
+    private(set) var accountID: String?
 
     let activity = TransferActivityStore()
     let queue: TransferQueue
@@ -80,7 +90,9 @@ final class AppSession {
         self.sessions = sessions
         keyrings = KeyringCache(sessions: sessions)
         drive = DriveClient(sessions: sessions)
-        queue = TransferQueue(storeURL: queueStoreURL)
+        // B12: nothing in the shared snapshot is visible or runnable until
+        // an account signs in (finishSignIn scopes the queue to it).
+        queue = TransferQueue(storeURL: queueStoreURL, accountScope: .signedOut)
     }
 
     // MARK: - sign-in
@@ -93,54 +105,96 @@ final class AppSession {
         guard phase != .signingIn, phase != .unlocking else { return }
         phase = .signingIn
         loginError = nil
+        twoFactorError = nil
         loginUsername = username
         clearPendingPassword() // re-entry: never overwrite live bytes unzeroed
         pendingPassword = Data(password.utf8)
         do {
             guard let pwd = pendingPassword else { throw ProtonAPIError.unauthorized }
             try await sessions.login(username: username, password: pwd)
-            phase = .unlocking
-            try await finishSignIn()
-            await refreshAccount()
-            phase = .signedIn
-            await loadRoots()
         } catch let e as ProtonAPIError where e == .needs2FA {
             // Keep pendingPassword: the unlock still runs after submitTwoFactor.
             phase = .needsTwoFactor
             return
-        } catch let e as ProtonAPIError where e == .bcryptNotAvailable {
-            loginError = "Crypto backend missing (bcrypt). Report this bug."
-            phase = .signedOut
         } catch {
-            loginError = UserFacingError.message(for: error)
+            // The SRP exchange failed: no session was stored (login only
+            // installs one after the server proof checks out).
+            loginError = Self.signInFailureMessage(error)
             phase = .signedOut
+            clearPendingPassword()
+            return
         }
-        clearPendingPassword()
+        phase = .unlocking
+        await completeSignIn()
     }
 
     /// Completes a 2FA-gated login (TOTP code), then the same unlock path.
+    /// F8.2-R7: a wrong code (or a network blip) keeps the prompt up with
+    /// an inline error, the half-open session and the retained password —
+    /// re-entering the password would cost another login against Proton's
+    /// 2028 rate limit. Only unrecoverable failures (session gone, rate
+    /// limited, human verification) sign out, with the full cleanup.
     func submitTwoFactor(code: String) async {
-        guard phase == .needsTwoFactor else { return }
-        phase = .unlocking
+        guard phase == .needsTwoFactor, !isVerifyingTwoFactor else { return }
+        isVerifyingTwoFactor = true
+        twoFactorError = nil
         do {
             try await sessions.submit2FA(code: code)
-            try await finishSignIn()
-            await refreshAccount()
-            phase = .signedIn
-            await loadRoots()
-        } catch let e as ProtonAPIError where e == .bcryptNotAvailable {
-            loginError = "Crypto backend missing (bcrypt). Report this bug."
-            phase = .signedOut
         } catch {
-            loginError = UserFacingError.message(for: error)
-            phase = .signedOut
+            isVerifyingTwoFactor = false
+            // Signed out / cancelled while the request was in flight.
+            guard phase == .needsTwoFactor else { return }
+            if TwoFactorFailure.isRecoverable(error) {
+                twoFactorError = TwoFactorFailure.message(for: error)
+            } else {
+                await abortSignIn(reason: UserFacingError.message(for: error))
+            }
+            return
         }
-        clearPendingPassword()
+        isVerifyingTwoFactor = false
+        guard phase == .needsTwoFactor else { return }
+        phase = .unlocking
+        await completeSignIn()
     }
 
     /// Backs out of the 2FA prompt — a plain sign-out with no error message.
     func cancelTwoFactor() async {
+        guard !isVerifyingTwoFactor else { return }
         await signOut()
+    }
+
+    /// The authenticated half of sign-in: key unlock, account header,
+    /// roots. F8.2-R7: a failure here happens with live tokens in
+    /// SessionManager and (possibly) user-key seeds in KeyringCache, so it
+    /// runs the full `signOut` cleanup — server-side revoke, keyring lock,
+    /// resolver reset, password wipe — and lands on the login screen with
+    /// the error.
+    private func completeSignIn() async {
+        do {
+            try await finishSignIn()
+        } catch {
+            await abortSignIn(reason: Self.signInFailureMessage(error))
+            return
+        }
+        clearPendingPassword()
+        await refreshAccount()
+        phase = .signedIn
+        await loadRoots()
+    }
+
+    /// Full `signOut` cleanup for a sign-in that got past SRP and then
+    /// failed; keeps the typed username so the login field is prefilled.
+    private func abortSignIn(reason: String) async {
+        let username = loginUsername
+        await signOut(reason: reason)
+        loginUsername = username
+    }
+
+    private static func signInFailureMessage(_ error: Error) -> String {
+        if let e = error as? ProtonAPIError, e == .bcryptNotAvailable {
+            return "Crypto backend missing (bcrypt). Report this bug."
+        }
+        return UserFacingError.message(for: error)
     }
 
     /// Sign-out order (S0.3): cancel in-flight downloads and pause + detach
@@ -155,6 +209,8 @@ final class AppSession {
         await queue.pauseAll()
         await queue.setUploader(nil)
         await uploads?.stop()
+        // B12: hide the account's jobs until someone signs in again.
+        await queue.setAccountScope(.signedOut)
         await resolver?.reset()
         resolver = nil
         listing = nil
@@ -170,6 +226,9 @@ final class AppSession {
         clearPendingPassword()
         loginUsername = nil
         account = nil
+        accountID = nil
+        isVerifyingTwoFactor = false
+        twoFactorError = nil
         loginError = reason
         phase = .signedOut
     }
@@ -218,7 +277,8 @@ final class AppSession {
     /// KeyringCache actor + `addressKeys` (memory only, never disk).
     private func finishSignIn() async throws {
         guard let pwd = pendingPassword else { throw ProtonAPIError.unauthorized }
-        let primaryID = try await keyrings.fetchUser().primaryKey?.id ?? ""
+        let user = try await keyrings.fetchUser()
+        let primaryID = user.primaryKey?.id ?? ""
         var salted = try await sessions.fetchSaltedKeyPass(password: pwd, primaryKeyID: primaryID)
         // Password-equivalent: zeroed once the user keys are unlocked (or
         // the unlock failed). KeyringCache's copy is gone by then.
@@ -244,6 +304,13 @@ final class AppSession {
             resolver: resolver, activity: activity
         )
         uploads = coordinator
+        // B12: scope the shared queue to this account BEFORE the
+        // coordinator wires the uploader — only its jobs show and run.
+        // /users always carries ID; the username fallback only keeps a
+        // malformed answer from mixing accounts.
+        let owner = user.id ?? "username:" + (loginUsername ?? "").lowercased()
+        accountID = owner
+        await queue.setAccountScope(.account(owner))
         await coordinator.start()
     }
 
@@ -270,10 +337,12 @@ extension AppSession {
         phase: Phase = .signedOut,
         account: Account? = nil,
         roots: DriveRoots? = nil,
-        rootsError: String? = nil
+        rootsError: String? = nil,
+        twoFactorError: String? = nil
     ) -> AppSession {
         let session = AppSession(queueStoreURL: nil)
         session.phase = phase
+        session.twoFactorError = twoFactorError
         session.account = account
         session.roots = roots
         session.rootsError = rootsError

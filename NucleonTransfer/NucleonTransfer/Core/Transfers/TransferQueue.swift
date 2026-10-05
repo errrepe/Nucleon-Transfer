@@ -56,12 +56,17 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
     /// as the draft exists; cleared on success) — a relaunch deletes it.
     var draftLinkID: String?
     var draftRevisionID: String?
+    /// Proton user ID of the account that enqueued the job (F8.2-R7 / B12).
+    /// The queue only shows and runs jobs of the signed-in account. nil =
+    /// written before B12 (or enqueued while unscoped) — adopted by the
+    /// next account that signs in (`TransferQueue.setAccountScope`).
+    var accountID: String?
 
     enum CodingKeys: String, CodingKey {
         case id, fileName, relativePath, localPath, localBookmark, shareID,
              parentLinkID, state, bytesTotal, bytesDone, attempt, maxAttempts,
              errorMessage, createdAt, updatedAt, remoteLinkID,
-             clientUID, draftLinkID, draftRevisionID
+             clientUID, draftLinkID, draftRevisionID, accountID
     }
 
     /// Tolerant decode (F8.2-R2): only the identity/destination fields are
@@ -90,6 +95,7 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
         clientUID = try c.decodeIfPresent(String.self, forKey: .clientUID)
         draftLinkID = try c.decodeIfPresent(String.self, forKey: .draftLinkID)
         draftRevisionID = try c.decodeIfPresent(String.self, forKey: .draftRevisionID)
+        accountID = try c.decodeIfPresent(String.self, forKey: .accountID)
     }
 
     var progress: Double {
@@ -106,7 +112,8 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
         shareID: String,
         parentLinkID: String,
         bytesTotal: Int64,
-        maxAttempts: Int = 5
+        maxAttempts: Int = 5,
+        accountID: String? = nil
     ) {
         self.id = id
         self.fileName = fileName
@@ -123,6 +130,29 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
         createdAt = Date()
         updatedAt = Date()
         clientUID = UUID().uuidString
+        self.accountID = accountID
+    }
+}
+
+// MARK: - Account scope (F8.2-R7 / B12)
+
+/// Which jobs the queue exposes and runs. The snapshot file is shared by
+/// every account that signs in on this Mac; a job must never be shown to,
+/// or uploaded with the keys of, another account.
+enum TransferAccountScope: Sendable, Equatable {
+    /// Every job (tests, previews — the pre-B12 behaviour).
+    case all
+    /// Only jobs stamped with this Proton user ID.
+    case account(String)
+    /// Nobody signed in: nothing is visible, nothing runs.
+    case signedOut
+
+    func includes(_ job: TransferJob) -> Bool {
+        switch self {
+        case .all: return true
+        case let .account(id): return job.accountID == id
+        case .signedOut: return false
+        }
     }
 }
 
@@ -344,6 +374,10 @@ actor TransferQueue {
     private var nextGeneration: UInt64 = 0
     private var uploader: (any TransferUploader)?
     private let store: (any TransferQueueStore)?
+    /// Jobs outside the scope are hidden from `snapshot`/the listener and
+    /// never pumped; their state is left untouched so they continue when
+    /// their own account signs in again (F8.2-R7 / B12).
+    private(set) var accountScope: TransferAccountScope
     /// UI hook: receives full snapshots (coalesced to ~100 ms).
     var listener: (@Sendable ([TransferJob]) -> Void)?
 
@@ -372,23 +406,27 @@ actor TransferQueue {
     init(
         storeURL: URL? = nil,
         uploader: (any TransferUploader)? = nil,
-        maxConcurrentUploads: Int = 3
+        maxConcurrentUploads: Int = 3,
+        accountScope: TransferAccountScope = .all
     ) {
         self.init(
             store: storeURL.map { FileTransferQueueStore(url: $0) as any TransferQueueStore },
             uploader: uploader,
-            maxConcurrentUploads: maxConcurrentUploads
+            maxConcurrentUploads: maxConcurrentUploads,
+            accountScope: accountScope
         )
     }
 
     init(
         store: (any TransferQueueStore)?,
         uploader: (any TransferUploader)? = nil,
-        maxConcurrentUploads: Int = 3
+        maxConcurrentUploads: Int = 3,
+        accountScope: TransferAccountScope = .all
     ) {
         self.store = store
         self.uploader = uploader
         self.maxConcurrentUploads = maxConcurrentUploads
+        self.accountScope = accountScope
         guard let data = store?.read() else { return }
         let decoded = TransferQueueSnapshot.decode(data)
         needsBackup = decoded.lossy
@@ -440,6 +478,39 @@ actor TransferQueue {
         listener = l
     }
 
+    /// Switches the visible/runnable account (F8.2-R7 / B12). Signing in
+    /// passes `.account(userID)`, signing out `.signedOut`.
+    ///
+    /// Legacy adoption: jobs with no `accountID` (persisted before B12)
+    /// are stamped with the FIRST account that becomes active — the old
+    /// snapshot recorded no owner, and pre-B12 builds were used with one
+    /// account per Mac in practice. Adopted jobs keep their state.
+    ///
+    /// The account's queued jobs go back in line (the pump skipped them
+    /// while another account was active), then the queue pumps.
+    func setAccountScope(_ scope: TransferAccountScope) {
+        accountScope = scope
+        if case let .account(id) = scope {
+            var adopted = false
+            for jobID in order where jobs[jobID]?.accountID == nil {
+                jobs[jobID]?.accountID = id
+                adopted = true
+            }
+            if adopted { persist(urgent: true) }
+        }
+        for jobID in order where isVisible(jobID) && jobs[jobID]?.state == .queued && inFlight[jobID] == nil {
+            fifo.append(jobID)
+        }
+        publish()
+        pump()
+    }
+
+    /// True when `id` exists and belongs to the active scope.
+    private func isVisible(_ id: UUID) -> Bool {
+        guard let job = jobs[id] else { return false }
+        return accountScope.includes(job)
+    }
+
     // MARK: enqueue
 
     func enqueue(_ job: TransferJob) {
@@ -451,8 +522,11 @@ actor TransferQueue {
     func enqueueMany(_ newJobs: [TransferJob]) {
         guard !newJobs.isEmpty else { return }
         let stamp = Date()
+        var owner: String?
+        if case let .account(id) = accountScope { owner = id }
         for var j in newJobs {
             j.updatedAt = stamp
+            if j.accountID == nil { j.accountID = owner } // B12: stamp the enqueuing account
             if jobs[j.id] == nil { order.append(j.id) }
             jobs[j.id] = j
             if j.state == .queued { fifo.append(j.id) }
@@ -522,10 +596,17 @@ actor TransferQueue {
 
     // MARK: operators
 
+    /// Jobs of the active account scope, in insertion order (UI listing).
     func snapshot() -> [TransferJob] {
+        order.compactMap { jobs[$0] }.filter(accountScope.includes)
+    }
+
+    /// Every persisted job, all accounts (diagnostics + tests).
+    func allJobs() -> [TransferJob] {
         order.compactMap { jobs[$0] }
     }
 
+    /// Any job by id, regardless of scope (tests, internal lookups).
     func job(id: UUID) -> TransferJob? { jobs[id] }
 
     /// Attaches (or refreshes) a job's security-scoped bookmark.
@@ -540,7 +621,7 @@ actor TransferQueue {
     func start() { pump() }
 
     func pause(id: UUID) {
-        guard var j = jobs[id] else { return }
+        guard isVisible(id), var j = jobs[id] else { return }
         switch j.state {
         case .queued, .uploading:
             j.state = .paused
@@ -554,9 +635,11 @@ actor TransferQueue {
         }
     }
 
+    /// Pauses the active scope's queued/running jobs (other accounts'
+    /// jobs never run, so there is nothing of theirs to stop).
     func pauseAll() {
         var touched = false
-        for id in order {
+        for id in order where isVisible(id) {
             guard var j = jobs[id] else { continue }
             if j.state == .queued || j.state == .uploading {
                 j.state = .paused
@@ -573,7 +656,7 @@ actor TransferQueue {
     }
 
     func resume(id: UUID) {
-        guard var j = jobs[id], j.state == .paused else { return }
+        guard isVisible(id), var j = jobs[id], j.state == .paused else { return }
         j.state = .queued
         j.errorMessage = nil
         j.updatedAt = Date()
@@ -585,7 +668,7 @@ actor TransferQueue {
     }
 
     func cancel(id: UUID) {
-        guard var j = jobs[id] else { return }
+        guard isVisible(id), var j = jobs[id] else { return }
         switch j.state {
         case .queued, .uploading, .paused, .failed:
             j.state = .cancelled
@@ -602,7 +685,7 @@ actor TransferQueue {
     /// Relaunch: failed/cancelled → fresh queued job (attempt + progress reset;
     /// F4.4 retries whole files — no partial-block resume yet, see docs).
     func relaunch(id: UUID) {
-        guard var j = jobs[id] else { return }
+        guard isVisible(id), var j = jobs[id] else { return }
         guard j.state == .failed || j.state == .cancelled else { return }
         Self.resetForRelaunch(&j)
         jobs[id] = j
@@ -616,7 +699,7 @@ actor TransferQueue {
     /// are left alone — only an explicit per-row relaunch restarts them.
     func relaunchAllFailed() {
         var touched = false
-        for id in order {
+        for id in order where isVisible(id) {
             guard var j = jobs[id], j.state == .failed else { continue }
             Self.resetForRelaunch(&j)
             jobs[id] = j
@@ -644,8 +727,8 @@ actor TransferQueue {
     /// the pump start another upload while this one was still unwinding,
     /// exceeding the concurrency limit (F8.2-R1).
     func remove(id: UUID) {
+        guard isVisible(id) else { return }
         tasks[id]?.cancel()
-        guard jobs[id] != nil else { return }
         jobs[id] = nil
         order.removeAll { $0 == id }
         persist(urgent: true)
@@ -670,7 +753,9 @@ actor TransferQueue {
             fifoHead += 1
             // An id whose previous run is still unwinding (paused then
             // resumed fast) is skipped: that run's exit re-queues it.
-            if jobs[id]?.state == .queued, inFlight[id] == nil { return id }
+            // B12: another account's job is skipped (its entry is dropped;
+            // `setAccountScope` re-queues it when that account is back).
+            if jobs[id]?.state == .queued, inFlight[id] == nil, isVisible(id) { return id }
         }
         return nil
     }
@@ -903,6 +988,6 @@ actor TransferQueue {
     private func deliver() {
         guard let listener else { return }
         lastNotify = now()
-        listener(order.compactMap { jobs[$0] })
+        listener(snapshot())
     }
 }

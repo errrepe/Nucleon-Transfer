@@ -54,6 +54,9 @@ struct ProtonUser: Decodable, Sendable {
     /// Name/DisplayName/Email/UsedSpace/MaxSpace. All optional — the
     /// synthesized Decodable uses decodeIfPresent, so minimal /users
     /// payloads (Keys only) still decode.
+    /// `ID` — the stable Proton user ID (go-proton-api `User.ID`); scopes
+    /// the persisted upload queue to its account (F8.2-R7 / B12).
+    var id: String?
     var name: String?
     var displayName: String?
     var email: String?
@@ -62,6 +65,7 @@ struct ProtonUser: Decodable, Sendable {
     var keys: [ProtonKeyRef]
 
     enum CodingKeys: String, CodingKey {
+        case id = "ID"
         case name = "Name"
         case displayName = "DisplayName"
         case email = "Email"
