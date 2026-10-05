@@ -53,9 +53,10 @@ enum UploadSourceError: Error, Sendable, Equatable {
     /// commit (written to, appended, or replaced at its path).
     case changedDuringUpload
 
-    /// Queue/UI message for `changedDuringUpload` (TransferFailure.permanent).
-    /// Name-free (F8.4-U2): the row shows the file name next to it.
-    static var changedMessage: String { UserFacingError.changedDuringUpload }
+    /// Queue token for `changedDuringUpload` (TransferFailure.permanent):
+    /// name-free and language-neutral (F8.4-U2 / review) — the row shows
+    /// the file name next to it, UserFacingError localizes it on display.
+    static var changedMessage: String { UserFacingError.Copy.changedDuringUpload.token }
 }
 
 /// In-memory source (tests, the `data:` convenience).

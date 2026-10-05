@@ -66,15 +66,28 @@ final class TransferActivityStore {
               downloads[i].applyProgress(fraction)
         else { return }
         if let bytes = downloads[i].bytesDone {
-            rates.record(id: id.uuidString, bytes: bytes, at: now())
+            let date = now()
+            updateRates { $0.record(id: id.uuidString, bytes: bytes, at: date) }
         }
     }
 
     /// Upload samples for the rate book: every queue snapshot
     /// (UploadCoordinator's listener is the single caller, F8.4-U7b).
-    /// Duplicate observations of one snapshot are dropped by the estimator.
+    /// Duplicate observations of one snapshot are dropped by the estimator,
+    /// and a snapshot with nothing uploading (and nothing tracked) leaves
+    /// the book untouched — no observation churn on idle snapshots.
     func recordUploadProgress(_ jobs: [TransferJob]) {
-        rates.record(uploads: jobs, at: now())
+        let date = now()
+        updateRates { $0.record(uploads: jobs, at: date) }
+    }
+
+    /// Applies `change` to a copy of the book and writes it back only when
+    /// it actually changed: every assignment to the observed `rates`
+    /// invalidates the views reading it, even with an equal value.
+    private func updateRates(_ change: (inout TransferRateBook) -> Void) {
+        var book = rates
+        change(&book)
+        if book != rates { rates = book }
     }
 
     /// Smoothed bytes/second for an in-flight transfer, nil while warming
@@ -91,7 +104,7 @@ final class TransferActivityStore {
                   fileCount: fileCount, destinationName: destination?.lastPathComponent
               )
         else { return }
-        rates.remove(id: id.uuidString)
+        updateRates { $0.remove(id: id.uuidString) }
         if let reveal {
             revealURLs[id] = reveal
         } else if let destination {
@@ -102,14 +115,14 @@ final class TransferActivityStore {
     func downloadFailed(id: UUID, error: Error) {
         guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
         downloads[i].fail(message: UserFacingError.message(for: error))
-        rates.remove(id: id.uuidString)
+        updateRates { $0.remove(id: id.uuidString) }
     }
 
     /// User cancel or sign-out (F8.2-R5): neutral "Cancelled", not a failure.
     func downloadCancelled(id: UUID) {
         guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
         downloads[i].cancel()
-        rates.remove(id: id.uuidString)
+        updateRates { $0.remove(id: id.uuidString) }
     }
 
     func clearFinished() {
@@ -124,7 +137,7 @@ final class TransferActivityStore {
     func removeDownload(id: UUID) {
         downloads.removeAll { $0.id == id }
         revealURLs.removeValue(forKey: id)
-        rates.remove(id: id.uuidString)
+        updateRates { $0.remove(id: id.uuidString) }
     }
 
     /// Post-operation consistency (S2.3): publish the parent linkIDs a
@@ -142,7 +155,7 @@ final class TransferActivityStore {
             downloads = Array(downloads.prefix(50))
             for id in dropped {
                 revealURLs.removeValue(forKey: id)
-                rates.remove(id: id.uuidString)
+                updateRates { $0.remove(id: id.uuidString) }
             }
         }
     }

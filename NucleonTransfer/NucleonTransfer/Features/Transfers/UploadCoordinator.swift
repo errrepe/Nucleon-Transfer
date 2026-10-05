@@ -86,12 +86,14 @@ final class UploadCoordinator {
     func start() async {
         if !started {
             started = true
+            // Seed before the uploader and the listener exist: failures
+            // restored from disk are old news and must not block uploads
+            // (F8.4-U1) — and a job failing right after the uploader starts
+            // must not be mistaken for a restored one.
+            knownFailed = Set(await queue.snapshot().filter { $0.state == .failed }.map(\.id))
             await queue.setUploader(
                 DriveUploadAdapter(drive: drive, addressKeys: addressKeys, resolver: resolver)
             )
-            // Seed before the listener can fire: failures restored from
-            // disk are old news and must not block uploads (F8.4-U1).
-            knownFailed = Set(await queue.snapshot().filter { $0.state == .failed }.map(\.id))
             await queue.setListener { [weak self] snap in
                 Task { @MainActor [weak self] in
                     guard let self else { return }

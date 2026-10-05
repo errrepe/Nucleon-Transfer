@@ -53,7 +53,7 @@ struct AppSettingsTests {
     }
 
     @Test func helpLinksPointAtTheRepository() throws {
-        let links = [HelpLinks.readme, HelpLinks.knownLimitations, HelpLinks.newIssue, HelpLinks.security]
+        let links = [HelpLinks.source, HelpLinks.readme, HelpLinks.knownLimitations, HelpLinks.newIssue, HelpLinks.security]
         for link in links {
             let url = try #require(link)
             #expect(url.scheme == "https")

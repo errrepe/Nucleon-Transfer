@@ -136,6 +136,23 @@
         }
       }
     },
+    "%@, %@" : {
+      "comment" : "Toolbar badge summary joining both counts: “3 active, 1 failed”",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@, %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@"
+          }
+        }
+      }
+    },
     "%@/s" : {
       "comment" : "Transfer speed, e.g. “3.2 MB/s”",
       "localizations" : {
@@ -279,12 +296,13 @@
         }
       }
     },
-    "A file named “%@” already exists here, so the folder can’t be created." : {
+    "A file with this name already exists here, so the folder can’t be created. Rename one of them and try again." : {
+      "comment" : "Failed folder upload: a file holds the folder’s name (the row shows the name)",
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Já existe um arquivo chamado “%@” aqui, então a pasta não pode ser criada."
+            "value" : "Já existe um arquivo com este nome aqui, então a pasta não pode ser criada. Renomeie um deles e tente novamente."
           }
         }
       }
@@ -371,6 +389,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Em Andamento"
+          }
+        }
+      }
+    },
+    "An item with this name already exists here, but it couldn’t be identified. Reload the folder and try again." : {
+      "comment" : "Failed folder upload: the server reports a duplicate name the listing can’t match",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Já existe um item com este nome aqui, mas não foi possível identificá-lo. Recarregue a pasta e tente novamente."
           }
         }
       }
@@ -2900,16 +2929,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "para %@"
-          }
-        }
-      }
-    },
-    "“%@” already exists but the conflicting item couldn’t be identified — reload the folder and retry." : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "“%@” já existe, mas o item em conflito não pôde ser identificado — recarregue a pasta e tente novamente."
           }
         }
       }

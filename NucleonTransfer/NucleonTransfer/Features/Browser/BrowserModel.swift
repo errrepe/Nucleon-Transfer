@@ -243,6 +243,8 @@ final class BrowserModel {
     /// only) after a relaunch. Best-effort: each folder must still sit in
     /// the previous one (FolderPathRestoration stops at the first missing
     /// link), and nothing happens if the user navigated meanwhile.
+    /// Each folder listed on the way is cached in its store (same rules
+    /// as `load`), so Back to an ancestor serves the cache.
     func restorePath(linkIDs: [String]) async {
         guard !previewStubbed, path.isEmpty, !linkIDs.isEmpty,
               let listing = session.listing
@@ -250,13 +252,32 @@ final class BrowserModel {
         let resolved = await FolderPathRestoration.resolve(
             linkIDs: linkIDs, root: rootLocation
         ) { location in
-            let store = self.state(for: location)
-            if store.phase == .loaded, !store.isStale { return store.items }
-            guard self.session.listing === listing else { return nil }
-            return try? await listing.children(of: location)
+            await self.walkListing(of: location, with: listing)
         }
         guard path.isEmpty, session.listing === listing, !resolved.isEmpty else { return }
         path = resolved
+    }
+
+    /// One step of `restorePath`: the cached rows when fresh, else a
+    /// listing that also fills the folder's store — unless a `load` of
+    /// that folder is already in flight (it publishes its own result; the
+    /// walk's copy is then used for the path only). The fill goes through `loadGate`
+    /// like `load`: a newer request wins and optimistic trash removals
+    /// stay hidden. The stale flag is left alone (a relaunch starts with
+    /// none; one set by `markStale` meanwhile must keep forcing a refetch).
+    private func walkListing(of location: DriveLocation, with listing: any DriveListingProviding) async -> [DriveItem]? {
+        let store = state(for: location)
+        if store.phase == .loaded, !store.isStale { return store.items }
+        guard session.listing === listing else { return nil }
+        let token: UInt64? = store.phase == .loading
+            ? nil : loadGate.begin(folder: location.linkID)
+        guard let items = try? await listing.children(of: location) else { return nil }
+        guard let token, session.listing === listing,
+              let visible = loadGate.apply(items, token: token, folder: location.linkID)
+        else { return items }
+        store.items = visible
+        store.phase = .loaded
+        return visible
     }
 
     /// Primary activation (double click / Open). Folders push onto the

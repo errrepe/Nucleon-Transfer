@@ -24,6 +24,11 @@
 // F8.4-U6: the transfers popover opens when a batch starts (same as
 // upload intake, and only if Settings › General allows it), and single
 // files report their size so the row can show speed and time left.
+// F8.4 review: `choosingDestination` covers the destination step only, so
+// a download requested while a batch runs starts its own batch (its own
+// adapter, grant and epoch check). Every batch draws from ONE AsyncSlots
+// pool — "Simultaneous downloads" bounds all batches together, served in
+// request order. The same item requested twice still runs once (inFlight).
 import Foundation
 
 @MainActor
@@ -36,8 +41,11 @@ final class DownloadCoordinator {
     /// duplicates a transfer (the legacy `downloading` set did the same).
     private var inFlight: Set<String> = []
     /// Guards against two destination panels stacking when the user
-    /// triggers Download twice in quick succession.
+    /// triggers Download twice in quick succession. Held only while the
+    /// destination resolves — a running batch never blocks a new one.
     private var choosingDestination = false
+    /// "Simultaneous downloads" slots shared by every batch.
+    private let slots = AsyncSlots()
     /// Record ID → the Task downloading that item (F8.2-R5).
     private var tasks: [UUID: Task<Void, Never>] = [:]
     /// Bumped by `cancelAll`: a batch started under an older epoch stops
@@ -53,16 +61,17 @@ final class DownloadCoordinator {
 
     /// Resolves one destination folder (default folder or panel), then
     /// downloads `items` with at most "Simultaneous downloads" in flight
-    /// (read once, at batch start). Cancellation (nil panel result)
-    /// silently no-ops — the user dismissed.
+    /// across all batches (the width is read once, at batch start).
+    /// Cancellation (nil panel result) silently no-ops — the user
+    /// dismissed. A request arriving while a panel is open is dropped
+    /// (no stacked panels); one arriving while a batch downloads runs.
     func download(_ items: [DriveItem]) async {
         guard !items.isEmpty, !choosingDestination else { return }
         let batchEpoch = epoch
         choosingDestination = true
-        defer { choosingDestination = false }
-        guard let destination = await Panels.downloadDestination(itemCount: items.count),
-              batchEpoch == epoch
-        else { return }
+        let chosen = await Panels.downloadDestination(itemCount: items.count)
+        choosingDestination = false
+        guard let destination = chosen, batchEpoch == epoch else { return }
         let scoped = destination.startAccessingSecurityScopedResource()
         // Runs after the bounded loop below has drained (it awaits every
         // started item), so no item outlives the grant.
@@ -79,7 +88,7 @@ final class DownloadCoordinator {
         }
         let width = AppSettings.maxConcurrentDownloads(.standard)
         await BoundedConcurrency.forEach(
-            items, width: width,
+            items, slots: slots, width: width,
             shouldStart: { batchEpoch == self.epoch }
         ) { [weak self] item in
             await self?.download(

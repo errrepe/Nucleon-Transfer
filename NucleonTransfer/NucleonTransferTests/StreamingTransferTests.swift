@@ -480,9 +480,12 @@ private func append(_ bytes: Data, to url: URL) throws {
     @Test func changedFileMessageIsActionableAndSurvivesTheHeuristics() {
         // F8.4-U2: name-free — the row shows the file name next to it, so
         // keyword heuristics never see a name like "photo500.jpg".
+        // Review fix: the persisted form is a language-neutral token; the
+        // copy is localized when the row renders.
         let msg = UploadSourceError.changedMessage
-        #expect(msg == "This file changed while it was uploading. Try again once it's no longer being written.")
-        #expect(UserFacingError.message(for: TransferFailure.permanent(msg)) == msg)
+        #expect(msg == "changed while it was uploading")
+        #expect(UserFacingError.message(for: TransferFailure.permanent(msg))
+            == "This file changed while it was uploading. Try again once it's no longer being written.")
         #expect(UserFacingError.message(for: UploadSourceError.changedDuringUpload)
             .contains("changed while it was uploading"))
         #expect(TransferErrorClassify.classify(TransferFailure.permanent(msg)) == .permanent(msg))

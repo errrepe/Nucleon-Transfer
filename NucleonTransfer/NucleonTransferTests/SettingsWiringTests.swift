@@ -73,6 +73,37 @@ struct BoundedConcurrencyTests {
         #expect(state.running == 0)
     }
 
+    /// Review fix (F8.4): two download batches running at once share one
+    /// "Simultaneous downloads" width instead of each getting their own.
+    @Test func sharedSlotsBoundConcurrentRunsTogether() async {
+        let probe = ConcurrencyProbe()
+        let slots = AsyncSlots()
+        async let first: Void = BoundedConcurrency.forEach(
+            Array(0..<6), slots: slots, width: 2
+        ) { await probe.run($0) }
+        async let second: Void = BoundedConcurrency.forEach(
+            Array(100..<106), slots: slots, width: 2
+        ) { await probe.run($0) }
+        _ = await (first, second)
+        let state = probe.state.withLock { $0 }
+        #expect(state.maxRunning <= 2)
+        #expect(state.started.count == 12)
+        #expect(state.running == 0)
+        #expect(await slots.inUse == 0) // every slot handed back
+    }
+
+    /// A closed gate hands its granted slot back, so the other run goes on.
+    @Test func closedGateReleasesItsSlot() async {
+        let probe = ConcurrencyProbe()
+        let slots = AsyncSlots()
+        await BoundedConcurrency.forEach(
+            Array(0..<4), slots: slots, width: 1, shouldStart: { false }
+        ) { await probe.run($0) }
+        #expect(await slots.inUse == 0)
+        await BoundedConcurrency.forEach(Array(0..<3), slots: slots, width: 1) { await probe.run($0) }
+        #expect(probe.state.withLock { $0.started } == [0, 1, 2])
+    }
+
     @Test func emptyInputReturnsImmediately() async {
         let probe = ConcurrencyProbe()
         await BoundedConcurrency.forEach([Int](), width: 4) { await probe.run($0) }

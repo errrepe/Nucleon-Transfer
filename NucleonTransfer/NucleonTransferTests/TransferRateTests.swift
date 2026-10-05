@@ -118,6 +118,37 @@ struct TransferRateTests {
         #expect(book.estimators.isEmpty)
     }
 
+    /// Review fix (F8.4): the activity store writes the observed book back
+    /// only when it changed — idle and duplicate snapshots must compare
+    /// equal so they cause no view invalidation.
+    @Test func idleAndDuplicateSnapshotsLeaveTheBookEqual() {
+        var job = TransferJob(
+            fileName: "a.bin", relativePath: "a.bin", localPath: "/tmp/a.bin",
+            shareID: "s", parentLinkID: "p", bytesTotal: 10_000_000
+        )
+        var book = TransferRateBook()
+        book.record(id: "download-1", bytes: 5, at: at(0))
+        let idle = book
+        // Nothing uploading, nothing tracked: no change.
+        book.record(uploads: [], at: at(1))
+        book.record(uploads: [job], at: at(1)) // queued, not uploading
+        #expect(book == idle)
+
+        job.state = .uploading
+        job.bytesDone = 1_000
+        book.record(uploads: [job], at: at(2))
+        #expect(book != idle) // a real sample changes it
+        let sampled = book
+        book.record(uploads: [job], at: at(2.01)) // same snapshot seen twice
+        #expect(book == sampled)
+
+        job.state = .done
+        book.record(uploads: [job], at: at(3))
+        #expect(book == idle) // estimator dropped, tracking cleared
+        book.record(uploads: [job], at: at(4))
+        #expect(book == idle)
+    }
+
     // MARK: - text
 
     @Test func speedText() {

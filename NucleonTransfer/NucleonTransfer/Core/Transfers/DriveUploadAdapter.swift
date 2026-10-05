@@ -79,8 +79,9 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
         do {
             source = try FileBlockSource(url: url)
         } catch {
-            // Name-free (F8.4-U2): the row already shows the file name.
-            throw TransferFailure.permanent(UserFacingError.fileUnreadable)
+            // Name-free token (F8.4-U2 / review): the row already shows
+            // the file name; the copy is localized at display time.
+            throw TransferFailure.permanent(UserFacingError.Copy.fileUnreadable.token)
         }
         let parent = try await resolver.folder(shareID: job.shareID, linkID: job.parentLinkID)
         let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
@@ -113,7 +114,7 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
         } catch is UploadSourceError {
             // The file changed or became unreadable mid-upload: retrying
             // the same job would hit the same file — permanent.
-            throw TransferFailure.permanent(UserFacingError.fileUnreadable)
+            throw TransferFailure.permanent(UserFacingError.Copy.fileUnreadable.token)
         }
     }
 

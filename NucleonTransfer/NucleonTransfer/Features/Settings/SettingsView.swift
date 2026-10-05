@@ -18,7 +18,7 @@ enum AboutContent {
         localized: "Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored.",
         comment: "About panel / Settings › About disclaimer"
     )
-    static let sourceCodeURL = URL(string: "https://github.com/errrepe/Nucleon-Transfer")
+    static var sourceCodeURL: URL? { HelpLinks.source }
 }
 
 struct SettingsView: View {

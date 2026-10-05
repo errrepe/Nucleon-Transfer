@@ -99,6 +99,8 @@ enum AppSettings {
 /// Fixed help/support links (Help menu, F8.4-U7).
 enum HelpLinks {
     static let repository = "https://github.com/errrepe/Nucleon-Transfer"
+    /// The repository itself (Settings › About "Source Code").
+    static let source = URL(string: repository)
     static let readme = URL(string: repository + "#readme")
     /// GitHub anchor of README's "## Known limitations (alpha)".
     static let knownLimitations = URL(string: repository + "#known-limitations-alpha")

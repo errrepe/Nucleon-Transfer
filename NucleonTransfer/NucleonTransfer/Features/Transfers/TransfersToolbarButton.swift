@@ -7,7 +7,9 @@
 // TabView/list rows — it is a no-op on an NSToolbarItem-backed button —
 // so the count rides on a small capsule overlay instead.
 // F8.4-U6: the capsule is accent-tinted for in-flight transfers and turns
-// red (with an exclamation glyph) only when something failed. Upload speed
+// red (with an exclamation glyph) only when something failed and nothing
+// runs any more; while transfers run, a failure adds a small red
+// exclamation dot to the tinted count (F8.4 review). Upload speed
 // samples come from UploadCoordinator's snapshot listener (F8.4-U7b), not
 // from this view.
 import AppKit
@@ -53,8 +55,9 @@ struct TransfersToolbarButton: View {
         }
     }
 
-    /// Count capsule: accent tint while transfers run, red + "!" glyph
-    /// when any failed (state never conveyed by color alone).
+    /// Count capsule: accent tint while transfers run (a red "!" dot on
+    /// its leading edge when some also failed), red + "!" glyph when only
+    /// failures remain (state never conveyed by color alone).
     /// `monospacedDigit` keeps the capsule width stable while the count
     /// changes. Hidden from VoiceOver — the button label carries it.
     @ViewBuilder
@@ -62,9 +65,12 @@ struct TransfersToolbarButton: View {
         switch badgeState {
         case .none:
             EmptyView()
-        case let .active(count):
+        case let .active(count, failed):
             capsule(fill: AnyShapeStyle(.tint)) {
                 Text(count, format: .number)
+            }
+            .overlay(alignment: .topLeading) {
+                if failed > 0 { failedMarker }
             }
         case let .failed(count):
             capsule(fill: AnyShapeStyle(.red)) {
@@ -75,6 +81,18 @@ struct TransfersToolbarButton: View {
                 }
             }
         }
+    }
+
+    /// Small red "!" dot riding on the active capsule (failures exist
+    /// while other transfers still run).
+    private var failedMarker: some View {
+        Image(systemName: "exclamationmark")
+            .font(.system(size: 6, weight: .black))
+            .foregroundStyle(.white)
+            .frame(width: 9, height: 9)
+            .background(.red, in: Circle())
+            .offset(x: 1, y: -7)
+            .accessibilityHidden(true)
     }
 
     private func capsule<Content: View>(
@@ -163,9 +181,19 @@ struct TransfersToolbarButton: View {
         .padding(40)
 }
 
-#Preview("Toolbar Button — Failed") {
+#Preview("Toolbar Button — Active + Failed") {
+    // In-flight fixtures plus one failure: tinted count with the red dot.
     let session = PreviewFixtures.session()
     session.activity.downloads = PreviewFixtures.downloadRecords + [PreviewFixtures.failedDownload]
+    return TransfersToolbarButton(session: session)
+        .padding(40)
+}
+
+#Preview("Toolbar Button — Failed") {
+    // Nothing in flight any more: the red failed capsule.
+    let session = PreviewFixtures.session()
+    session.activity.downloads = PreviewFixtures.downloadRecords.filter { $0.state != .downloading }
+        + [PreviewFixtures.failedDownload]
     return TransfersToolbarButton(session: session)
         .padding(40)
 }

@@ -173,14 +173,46 @@ struct UserFacingErrorCopyTests {
         #expect(UserFacingError.message(forMessage: "x15030y") == "x15030y")
     }
 
-    @Test func classifyStoresNameFreeUserCopy() {
-        // Queue tokens stay parseable ("api N:"), everything else is copy.
+    @Test func classifyStoresNameFreeLanguageNeutralTokens() {
+        // Queue tokens stay parseable ("api N:"); everything else is a
+        // "copy <id>" token, localized only when displayed (F8.4 review).
         #expect(TransferErrorClassify.classify(ProtonAPIError.api(code: 2000, message: "m")) == .permanent("api 2000: m"))
         let cocoa = CocoaError(.fileReadNoSuchFile, userInfo: [NSFilePathErrorKey: "/tmp/IMG_5001.jpg"])
         guard case let .permanent(stored) = TransferErrorClassify.classify(cocoa) else {
             Issue.record("expected permanent")
             return
         }
+        #expect(stored == "copy file-gone")
         #expect(!stored.contains("IMG_5001"))
+        #expect(UserFacingError.message(forMessage: stored) == UserFacingError.message(for: cocoa))
+        #expect(TransferErrorClassify.classify(ProtonAPIError.unauthorized) == .permanent("copy signed-out"))
+        #expect(TransferErrorClassify.classify(URLError(.secureConnectionFailed)) == .permanent("copy server-unverified"))
+        #expect(TransferErrorClassify.classify(FileUploadError.badContentKeyPacket) == .permanent("copy preparing-file"))
+    }
+
+    /// Every persisted copy token maps back to its localized text, and the
+    /// typed-error path and the token path agree.
+    @Test func copyTokensRoundTrip() {
+        for copy in UserFacingError.Copy.allCases {
+            #expect(!copy.text.isEmpty)
+            #expect(UserFacingError.message(forMessage: copy.token) == copy.text, "\(copy)")
+        }
+        let errors: [Error] = [
+            ProtonAPIError.invalidServerProof, ProtonAPIError.untrustedStorageHost("h.example"),
+            FileDownloadError.hashMismatch(index: 0), DecryptChainError.missingMaterial("NodeKey"),
+            UploadSourceError.changedDuringUpload, URLError(.timedOut),
+            CocoaError(.fileWriteOutOfSpace), CancellationError(),
+            ProtonAPIError.http(status: 503, code: nil, message: "down"),
+            ProtonAPIError.api(code: 2500, message: "exists"),
+        ]
+        for error in errors {
+            #expect(UserFacingError.message(forMessage: UserFacingError.token(for: error))
+                == UserFacingError.message(for: error), "\(error)")
+        }
+        // Unknown ids (a newer build's token) degrade to the generic copy.
+        #expect(UserFacingError.message(forMessage: "copy from-the-future") == UserFacingError.somethingWentWrong)
+        // Pre-review persisted copy (already localized) still passes through.
+        let legacy = UserFacingError.Copy.networkUnreachable.text
+        #expect(UserFacingError.message(forMessage: legacy) == legacy)
     }
 }

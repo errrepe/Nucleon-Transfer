@@ -213,8 +213,9 @@ enum TransferErrorClassify {
                 // Login-rate-limit shape reused defensively: surface, don't spin.
                 return .permanent("rate limited")
             default:
-                // F8.4-U2: store the user-facing copy (name-free).
-                return .permanent(UserFacingError.message(for: api))
+                // Persist a language-neutral, name-free token; the copy is
+                // localized at display time (UserFacingError.message(forJob:)).
+                return .permanent(UserFacingError.token(for: api))
             }
         }
         let ns = error as NSError
@@ -225,14 +226,15 @@ enum TransferErrorClassify {
                  NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed,
                  NSURLErrorResourceUnavailable, NSURLErrorInternationalRoamingOff,
                  NSURLErrorCallIsActive, NSURLErrorDataNotAllowed:
-                return .transient(UserFacingError.message(for: error))
+                return .transient(UserFacingError.token(for: error))
             default:
-                return .permanent(UserFacingError.message(for: error))
+                return .permanent(UserFacingError.token(for: error))
             }
         }
         // F8.4-U2: never persist a raw localizedDescription — Cocoa file
         // errors quote file names, which the string mapper must not see.
-        return .permanent(UserFacingError.message(for: error))
+        // F8.4 review: nor localized copy — a token, localized on display.
+        return .permanent(UserFacingError.token(for: error))
     }
 
     /// The Proton envelope code carried by `error` (`.api` or an `.http`

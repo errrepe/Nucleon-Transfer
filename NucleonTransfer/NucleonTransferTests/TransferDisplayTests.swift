@@ -282,17 +282,27 @@ struct TransferDisplayTests {
             TransferDisplay.badge(
                 uploads: [job(state: .uploading), job(state: .cancelled)],
                 downloads: [record(state: .downloading), record(state: .cancelled)]
-            ) == .active(2)
+            ) == .active(2, failed: 0)
         )
         #expect(
             TransferDisplay.badge(
-                uploads: [job(state: .uploading), job(state: .failed)],
-                downloads: [record(state: .failed, errorMessage: "x")]
+                uploads: [job(state: .failed)],
+                downloads: [record(state: .failed, errorMessage: "x"), record(state: .done)]
             ) == .failed(2)
         )
-        #expect(TransferBadge.active(2).summary == "2 active")
+        #expect(TransferBadge.active(2, failed: 0).summary == "2 active")
         #expect(TransferBadge.failed(1).summary == "1 failed")
         #expect(TransferBadge.none.summary == nil)
+    }
+
+    /// Review fix (F8.4): a failure no longer hides what is still running.
+    @Test func badgeKeepsTheActiveCountWhenSomethingFailed() {
+        let badge = TransferDisplay.badge(
+            uploads: [job(state: .uploading), job(state: .queued), job(state: .failed)],
+            downloads: [record(state: .downloading), record(state: .failed, errorMessage: "x")]
+        )
+        #expect(badge == .active(3, failed: 2))
+        #expect(TransferBadge.active(3, failed: 1).summary == "3 active, 1 failed")
     }
 
     // MARK: - F8.4-U8 status glyphs + VoiceOver value

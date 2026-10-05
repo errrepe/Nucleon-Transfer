@@ -11,8 +11,9 @@ import SwiftUI
 enum UploadsBlockedCopy {
     static let message: LocalizedStringResource =
         "Uploads aren't available yet. Proton hasn't approved this app for uploads. Downloads work normally."
-    /// README "Known limitations (alpha)" section on GitHub.
-    static let learnMoreURL = URL(string: "https://github.com/errrepe/Nucleon-Transfer#known-limitations-alpha")
+    /// README "Known limitations (alpha)" section on GitHub (single
+    /// source: HelpLinks).
+    static var learnMoreURL: URL? { HelpLinks.knownLimitations }
 }
 
 /// Common chrome for the strips: callout text on a regular material bar.

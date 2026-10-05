@@ -52,19 +52,33 @@ struct TransferDisplayItem: Identifiable, Sendable, Equatable {
     }
 }
 
-/// Toolbar badge (F8.4-U6): failures win (red, failed count + glyph);
-/// otherwise the in-flight count in the accent tint; nothing when idle.
+/// Toolbar badge (F8.4-U6; F8.4 review): the in-flight count in the accent
+/// tint while anything runs (plus a red marker when something failed);
+/// red failed count + glyph once nothing runs; nothing when idle.
 enum TransferBadge: Sendable, Equatable {
     case none
-    case active(Int)
+    /// Transfers in flight (tinted count). `failed` > 0 adds a red marker:
+    /// a failure never hides how much is still running (F8.4 review).
+    case active(Int, failed: Int)
+    /// Nothing in flight, something failed (red).
     case failed(Int)
 
-    /// VoiceOver / tooltip suffix: "3 active", "2 failed".
+    /// VoiceOver / tooltip suffix: "3 active", "3 active, 1 failed",
+    /// "2 failed".
     var summary: String? {
         switch self {
-        case .none: return nil
-        case let .active(n): return String(localized: "\(n) active")
-        case let .failed(n): return String(localized: "\(n) failed")
+        case .none:
+            return nil
+        case let .active(n, failed):
+            let active = String(localized: "\(n) active")
+            guard failed > 0 else { return active }
+            let failedText = String(localized: "\(failed) failed")
+            return String(
+                localized: "\(active), \(failedText)",
+                comment: "Toolbar badge summary joining both counts: “3 active, 1 failed”"
+            )
+        case let .failed(n):
+            return String(localized: "\(n) failed")
         }
     }
 }
@@ -201,12 +215,14 @@ enum TransferDisplay {
             + downloads.filter { $0.state == .failed }.count
     }
 
-    /// Toolbar badge state: red only when something actually failed.
+    /// Toolbar badge state: the active count while anything is in flight
+    /// (carrying the failed count for its marker), red only once nothing
+    /// runs and something actually failed.
     static func badge(uploads: [TransferJob], downloads: [DownloadRecord]) -> TransferBadge {
         let failed = failedCount(uploads: uploads, downloads: downloads)
-        if failed > 0 { return .failed(failed) }
         let active = activeCount(uploads: uploads, downloads: downloads)
-        return active > 0 ? .active(active) : .none
+        if active > 0 { return .active(active, failed: failed) }
+        return failed > 0 ? .failed(failed) : .none
     }
 
     // MARK: - subtitles
