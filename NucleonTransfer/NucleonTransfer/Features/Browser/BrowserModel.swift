@@ -134,6 +134,7 @@ final class BrowserModel {
         guard uploadsBlocked else { return false }
         #if DEBUG
         if previewUploadsBlocked != nil { return !previewBannerDismissed }
+        if session.uploads == nil { return !DebugOverrides.shared.uploadsBannerDismissed }
         #endif
         return !(session.uploads?.uploadsBlockedBannerDismissed ?? false)
     }
@@ -142,6 +143,7 @@ final class BrowserModel {
     func dismissUploadsBlockedBanner() {
         #if DEBUG
         if previewUploadsBlocked != nil { previewBannerDismissed = true; return }
+        if session.uploads == nil { DebugOverrides.shared.uploadsBannerDismissed = true; return }
         #endif
         session.uploads?.uploadsBlockedBannerDismissed = true
     }
@@ -150,6 +152,7 @@ final class BrowserModel {
     private func reshowUploadsBlockedBanner() {
         #if DEBUG
         if previewUploadsBlocked != nil { previewBannerDismissed = false; return }
+        if session.uploads == nil { DebugOverrides.shared.uploadsBannerDismissed = false; return }
         #endif
         session.uploads?.uploadsBlockedBannerDismissed = false
     }
