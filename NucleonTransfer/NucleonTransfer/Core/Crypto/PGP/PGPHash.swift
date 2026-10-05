@@ -54,6 +54,25 @@ enum PGPHash {
     }
 }
 
+extension PGPHash {
+    /// Digest of the concatenation of `parts` without joining them
+    /// (F8.3-P2: signing/verifying a 4 MiB block no longer copies it to
+    /// append the signature trailer). SHA-2 streams; other IDs fall back
+    /// to the one-shot path.
+    static func digest(id: UInt8, parts: [Data]) throws -> Data {
+        func stream<H: HashFunction>(_ h: inout H) -> Data {
+            for part in parts { part.withUnsafeBytes { h.update(bufferPointer: $0) } }
+            return Data(h.finalize())
+        }
+        switch id {
+        case 8: var h = SHA256(); return stream(&h)
+        case 9: var h = SHA384(); return stream(&h)
+        case 10: var h = SHA512(); return stream(&h)
+        default: return try digest(id: id, parts.reduce(Data(), +))
+        }
+    }
+}
+
 /// String-to-key. Consumes the specifier at `spec` start, returns
 /// (derivedKey, bytesConsumed).
 enum S2K {

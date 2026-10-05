@@ -201,9 +201,7 @@ enum DetachedSign {
         trailer.append(UInt8((l >> 16) & 0xFF))
         trailer.append(UInt8((l >> 8) & 0xFF))
         trailer.append(UInt8(l & 0xFF))
-        var input = data
-        input.append(trailer)
-        let digest = try PGPHash.digest(id: hashAlgo, input)
+        let digest = try PGPHash.digest(id: hashAlgo, parts: [data, trailer])
         let sig = try priv.signature(for: digest)
         body.append(digest[digest.startIndex])
         body.append(digest[digest.index(after: digest.startIndex)])

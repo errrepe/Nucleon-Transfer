@@ -1,5 +1,7 @@
 // Nucleon Transfer — file download core (F5).
-// Offline-testable: pure reassembly + hash verify + destination planning.
+// Offline-testable: block verify/decrypt, streaming into a part file
+// (F8.3-P2: bounded reorder window, decrypt off any actor), whole-file
+// reassembly (tests), destination planning + exclusive placement.
 // Live wiring (DriveClient revisions/storage + key unlock) lives in
 // DriveDownloadAdapter.swift; UI progress lives in the browser view-model.
 //
@@ -98,17 +100,130 @@ enum FileDownload {
         }
         var out = Data()
         for b in ordered {
-            try verifyBlock(b)
-            let plain = try FileUpload.decryptBlock(b.encrypted, contentKey: contentKey)
-            if let signatures {
-                try verifyBlockSignature(
-                    b.encSignature, index: b.index, plaintext: plain,
-                    encryptedHash: Data(SHA256.hash(data: b.encrypted)), check: signatures
-                )
-            }
-            out.append(plain)
+            out.append(try decodeBlock(b, contentKey: contentKey, signatures: signatures))
         }
         return out
+    }
+
+    /// One block, fail closed: SHA-256 of the storage bytes against the
+    /// (manifest-pinned) wire hash -> decrypt -> EncSignature (when
+    /// `signatures` is set). Pure; the streaming download runs it in child
+    /// tasks off any actor.
+    static func decodeBlock(
+        _ block: FetchedBlock, contentKey: Data, signatures: BlockSignatureCheck?
+    ) throws -> Data {
+        guard let expected = Data(base64Encoded: block.expectedHashB64) else {
+            throw FileDownloadError.badBlockHash(block.expectedHashB64)
+        }
+        let actual = Data(SHA256.hash(data: block.encrypted))
+        guard actual == expected else {
+            throw FileDownloadError.hashMismatch(index: block.index)
+        }
+        let plain = try FileUpload.decryptBlock(block.encrypted, contentKey: contentKey)
+        if let signatures {
+            try verifyBlockSignature(
+                block.encSignature, index: block.index, plaintext: plain,
+                encryptedHash: actual, check: signatures
+            )
+        }
+        return plain
+    }
+
+    // MARK: - streaming download (F8.3-P2)
+
+    /// Streams a revision's blocks into a NEW part file in `directory`
+    /// (`.<name>.<uuid>.nucleon-part`) and returns it with the plaintext
+    /// size. Blocks are fetched, hash-verified, decrypted and
+    /// signature-checked in child tasks on the global executor (this
+    /// function is @concurrent), then appended IN ORDER through one
+    /// FileHandle. At most `window` blocks are in flight or waiting for an
+    /// earlier one (the reorder buffer): memory stays ~window x block size
+    /// whatever the file size, and blocks may arrive in any order.
+    /// `blocks` must be the revision's dense 1-based list (the manifest
+    /// that pins their hashes is verified by the caller BEFORE this runs).
+    /// Any failure or cancellation removes the part file. `progress`
+    /// reports (blocks written, total) after each write.
+    @concurrent
+    static func downloadToPart(
+        blocks: [RevisionBlock],
+        contentKey: Data,
+        signatures: BlockSignatureCheck?,
+        window: Int,
+        directory: URL,
+        name: String,
+        fetch: @escaping @Sendable (RevisionBlock) async throws -> Data,
+        progress: @Sendable (_ done: Int, _ total: Int) async -> Void = { _, _ in }
+    ) async throws -> (part: URL, size: Int64) {
+        let ordered = blocks.sorted { $0.index < $1.index }
+        for (i, b) in ordered.enumerated() where b.index != i + 1 {
+            throw FileDownloadError.blockIndexGap
+        }
+        try Task.checkCancellation()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let part = try writePart(Data(), in: directory, name: name)
+        do {
+            let handle = try FileHandle(forWritingTo: part)
+            defer { try? handle.close() }
+            let size = try await streamBlocks(
+                ordered, contentKey: contentKey, signatures: signatures,
+                window: max(1, window), fetch: fetch, progress: progress
+            ) { try handle.write(contentsOf: $0) }
+            try handle.synchronize()
+            return (part, size)
+        } catch {
+            try? FileManager.default.removeItem(at: part)
+            throw error
+        }
+    }
+
+    /// The bounded fetch -> decode -> in-order write loop of downloadToPart.
+    private static func streamBlocks(
+        _ ordered: [RevisionBlock],
+        contentKey: Data,
+        signatures: BlockSignatureCheck?,
+        window: Int,
+        fetch: @escaping @Sendable (RevisionBlock) async throws -> Data,
+        progress: @Sendable (Int, Int) async -> Void,
+        write: (Data) throws -> Void
+    ) async throws -> Int64 {
+        let total = ordered.count
+        var written: Int64 = 0
+        try await withThrowingTaskGroup(of: (Int, Data).self) { group in
+            var next = 0       // next block to submit
+            var nextWrite = 0  // next block the file needs
+            var waiting: [Int: Data] = [:]
+            func submit(_ i: Int) {
+                let block = ordered[i]
+                group.addTask {
+                    let bytes = try await fetch(block)
+                    try Task.checkCancellation()
+                    let plain = try decodeBlock(
+                        FetchedBlock(
+                            index: block.index, encrypted: bytes,
+                            expectedHashB64: block.hash, encSignature: block.encSignature
+                        ),
+                        contentKey: contentKey, signatures: signatures
+                    )
+                    return (i, plain)
+                }
+            }
+            // In flight + waiting never exceeds `window`.
+            while next < total, next < nextWrite + window { submit(next); next += 1 }
+            while nextWrite < total {
+                try Task.checkCancellation()
+                guard let (i, plain) = try await group.next() else { break }
+                waiting[i] = plain
+                while let ready = waiting.removeValue(forKey: nextWrite) {
+                    try write(ready)
+                    written += Int64(ready.count)
+                    nextWrite += 1
+                    await progress(nextWrite, total)
+                }
+                while next < total, next < nextWrite + window { submit(next); next += 1 }
+            }
+        }
+        try Task.checkCancellation()
+        return written
     }
 
     /// Convenience roundtrip for tests: splits + encrypts via FileUpload,
@@ -410,14 +525,8 @@ enum FileDownload {
 
     /// Atomic, non-destructive write: unique temp `*.nucleon-part` in the
     /// destination directory, then an EXCLUSIVE rename (TRANSFERS.md §2.2).
-    /// If `destination` exists at move time the next free `name (n)` is
-    /// used — an existing file is never removed (F8.2-R5). Creates
-    /// intermediate directories. Returns the final URL.
-    /// Every candidate the exclusive move refused is excluded from the next
-    /// probe (F8.2 review): a name the existence check calls free but the
-    /// rename still refuses (an item that `itemExists` cannot see) is never
-    /// retried, so each attempt targets a different name. `move` is a test
-    /// seam (default `moveExclusive`).
+    /// Creates intermediate directories. Returns the final URL. The rename
+    /// half is `finalizePart` (shared with the streaming download).
     @discardableResult
     static func atomicWrite(
         _ data: Data,
@@ -428,8 +537,27 @@ enum FileDownload {
         try FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true
         )
+        let part = try writePart(data, in: dir, name: destination.lastPathComponent)
+        return try finalizePart(part, to: destination, move: move)
+    }
+
+    /// Moves an existing part file (same directory as `destination`) into
+    /// place with an EXCLUSIVE rename. If `destination` exists at move time
+    /// the next free `name (n)` is used — an existing file is never removed
+    /// (F8.2-R5). Every candidate the exclusive move refused is excluded
+    /// from the next probe (F8.2 review): a name the existence check calls
+    /// free but the rename still refuses (an item that `itemExists` cannot
+    /// see) is never retried, so each attempt targets a different name.
+    /// The part file is removed on failure. `move` is a test seam (default
+    /// `moveExclusive`). Returns the final URL.
+    @discardableResult
+    static func finalizePart(
+        _ part: URL,
+        to destination: URL,
+        move: (URL, URL) throws -> Bool = { try FileDownload.moveExclusive($0, to: $1) }
+    ) throws -> URL {
+        let dir = destination.deletingLastPathComponent()
         let name = destination.lastPathComponent
-        let part = try writePart(data, in: dir, name: name)
         do {
             var candidate = destination
             var refused: Set<String> = []

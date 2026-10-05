@@ -130,9 +130,7 @@ struct DetachedSig: Sendable {
               let pub = try? Curve25519.Signing.PublicKey(rawRepresentation: point) else {
             return false
         }
-        var input = data
-        input.append(trailer)
-        let digest = try PGPHash.digest(id: hashAlgo, input)
+        let digest = try PGPHash.digest(id: hashAlgo, parts: [data, trailer])
         guard digest.prefix(2) == hashLeftExpected else { return false }
         return pub.isValidSignature(edSignature, for: digest)
     }
