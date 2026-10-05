@@ -33,7 +33,9 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .appInfo) {
             Button("About Nucleon Transfer") {
                 NSApp.orderFrontStandardAboutPanel(options: [
-                    .credits: NSAttributedString(string: AboutContent.disclaimer)
+                    // CFBundleName is the target name ("NucleonTransfer").
+                    .applicationName: AboutContent.appName,
+                    .credits: AboutContent.panelCredits,
                 ])
             }
         }

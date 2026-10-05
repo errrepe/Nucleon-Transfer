@@ -15,12 +15,40 @@ import SwiftUI
 
 /// About-panel copy (spec 6.6) — shared by the App menu's About command
 /// (shown in the standard panel's credits) and the Settings › About tab.
+/// Just what the app is and the non-affiliation notice: the password /
+/// keychain explanation lives where it applies (the login screen and
+/// Settings › Account), not in About.
 enum AboutContent {
+    static let appName = "Nucleon Transfer"
     static let disclaimer = String(
-        localized: "Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored. “Keep me signed in” saves a session token in this Mac's keychain.",
+        localized: "Nucleon Transfer is an independent, open-source app for Proton Drive. It is not affiliated with or endorsed by Proton AG.",
         comment: "About panel / Settings › About disclaimer"
     )
     static var sourceCodeURL: URL? { HelpLinks.source }
+
+    /// Credits for the standard About panel: small, centered, secondary —
+    /// like Apple's own panels — then the source-code link. A bare
+    /// NSAttributedString rendered in the default 12-pt body font, left
+    /// aligned (live check).
+    static var panelCredits: NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let base: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: paragraph,
+        ]
+        let credits = NSMutableAttributedString(string: disclaimer, attributes: base)
+        if let url = sourceCodeURL {
+            credits.append(NSAttributedString(string: "\n\n", attributes: base))
+            var link = base
+            link[.link] = url
+            credits.append(NSAttributedString(
+                string: String(localized: "Source Code"), attributes: link
+            ))
+        }
+        return credits
+    }
 }
 
 struct SettingsView: View {
