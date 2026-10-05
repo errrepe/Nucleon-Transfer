@@ -208,7 +208,8 @@ enum TransferErrorClassify {
                 // Login-rate-limit shape reused defensively: surface, don't spin.
                 return .permanent("rate limited")
             default:
-                return .permanent(api.localizedDescription)
+                // F8.4-U2: store the user-facing copy (name-free).
+                return .permanent(UserFacingError.message(for: api))
             }
         }
         let ns = error as NSError
@@ -219,12 +220,14 @@ enum TransferErrorClassify {
                  NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed,
                  NSURLErrorResourceUnavailable, NSURLErrorInternationalRoamingOff,
                  NSURLErrorCallIsActive, NSURLErrorDataNotAllowed:
-                return .transient(ns.localizedDescription)
+                return .transient(UserFacingError.message(for: error))
             default:
-                return .permanent(ns.localizedDescription)
+                return .permanent(UserFacingError.message(for: error))
             }
         }
-        return .permanent(error.localizedDescription)
+        // F8.4-U2: never persist a raw localizedDescription — Cocoa file
+        // errors quote file names, which the string mapper must not see.
+        return .permanent(UserFacingError.message(for: error))
     }
 
     /// Server-requested wait (`Retry-After`, seconds) carried by `error`,

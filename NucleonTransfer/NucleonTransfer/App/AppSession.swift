@@ -191,10 +191,7 @@ final class AppSession {
     }
 
     private static func signInFailureMessage(_ error: Error) -> String {
-        if let e = error as? ProtonAPIError, e == .bcryptNotAvailable {
-            return "Crypto backend missing (bcrypt). Report this bug."
-        }
-        return UserFacingError.message(for: error)
+        UserFacingError.message(for: error)
     }
 
     /// Sign-out order (S0.3): cancel in-flight downloads and pause + detach

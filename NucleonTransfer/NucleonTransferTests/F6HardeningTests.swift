@@ -21,7 +21,7 @@ struct UserFacingErrorTests {
 
     @Test func humanVerificationPauses() {
         let msg = UserFacingError.message(for: ProtonAPIError.humanVerificationRequired)
-        #expect(msg.contains("9001"))
+        #expect(msg.hasSuffix("(Error 9001)"))
         #expect(msg.lowercased().contains("human verification"))
     }
 
@@ -32,25 +32,25 @@ struct UserFacingErrorTests {
 
     @Test func needs2FAActionable() {
         let msg = UserFacingError.message(for: ProtonAPIError.needs2FA)
-        #expect(msg.lowercased().contains("two-factor") || msg.lowercased().contains("totp"))
+        #expect(msg.lowercased().contains("two-factor"))
     }
 
     @Test func transient429BacksOff() {
         let msg = UserFacingError.message(for: ProtonAPIError.api(code: 429, message: "slow"))
-        #expect(msg.contains("429"))
-        #expect(msg.lowercased().contains("backing off") || msg.lowercased().contains("leave"))
+        #expect(msg.hasSuffix("(Error 429)"))
+        #expect(msg.lowercased().contains("retry"))
     }
 
     @Test func server5xxRetries() {
         let msg = UserFacingError.message(for: ProtonAPIError.api(code: 503, message: "down"))
-        #expect(msg.contains("503"))
-        #expect(msg.lowercased().contains("retry"))
+        #expect(msg.hasSuffix("(Error 503)"))
+        #expect(msg.lowercased().contains("try again"))
     }
 
     @Test func photoShare2511GuidesDrive() {
         let msg = UserFacingError.message(for: ProtonAPIError.api(code: 2511, message: "photo"))
-        #expect(msg.contains("2511"))
-        #expect(msg.lowercased().contains("drive"))
+        #expect(msg.hasSuffix("(Error 2511)"))
+        #expect(msg.contains("My Files"))
     }
 
     @Test func networkOfflineActionable() {
@@ -61,7 +61,7 @@ struct UserFacingErrorTests {
     @Test func hashMismatchActionable() {
         let msg = UserFacingError.message(for: FileDownloadError.hashMismatch(index: 2))
         #expect(msg.lowercased().contains("integrity"))
-        #expect(msg.lowercased().contains("retry"))
+        #expect(msg.lowercased().contains("try again"))
     }
 
     @Test func transferFailureHVMaps() {
@@ -74,27 +74,24 @@ struct UserFacingErrorTests {
         #expect(UserFacingError.message(forMessage: "rate limited").lowercased().contains("wait"))
         #expect(UserFacingError.message(forMessage: "HV 9001 required").contains("9001"))
         #expect(UserFacingError.message(forMessage: "api 429: slow").contains("429"))
-        #expect(UserFacingError.message(forMessage: "api 400: bad").contains("400"))
+        #expect(UserFacingError.message(forMessage: "api 400: bad").hasSuffix("(Error 400)"))
     }
 
     @Test func api2000UploadAllowlistHonest() {
         let msg = UserFacingError.message(for: ProtonAPIError.api(
             code: 2000, message: "You are using an outdated version of the app. Please update to upload this file."))
-        #expect(msg.contains("2000"))
-        #expect(msg.lowercased().contains("allowlist"))
-        #expect(msg.lowercased().contains("download"))
+        #expect(msg == "Upload not available yet (Error 2000).")
     }
 
     @Test func api2000StringHeuristic() {
         let msg = UserFacingError.message(forMessage: "api 2000: You are using an outdated version of the app.")
-        #expect(msg.contains("2000"))
-        #expect(msg.lowercased().contains("alpha"))
+        #expect(msg == "Upload not available yet (Error 2000).")
     }
 
-    @Test func api2501EchoesServerText() {
+    @Test func api2501ExplainsWithoutEchoingJargon() {
         let msg = UserFacingError.message(for: ProtonAPIError.api(code: 2501, message: "Draft file not found"))
-        #expect(msg.contains("2501"))
-        #expect(msg.contains("Draft file not found"))
+        #expect(msg.hasSuffix("(Error 2501)"))
+        #expect(msg.contains("may already be gone"))
     }
 }
 

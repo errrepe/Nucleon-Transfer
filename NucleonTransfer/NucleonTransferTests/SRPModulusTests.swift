@@ -272,9 +272,9 @@ struct SRPModulusTests {
 
     @Test func newErrorsHaveActionableMessages() {
         #expect(UserFacingError.message(for: ProtonAPIError.unsupportedAuthVersion(2))
-            .contains("auth version 2"))
+            .contains("older password format"))
         #expect(UserFacingError.message(for: ProtonAPIError.invalidModulusSignature)
-            .contains("signature verification"))
+            .contains("don't sign in on this network"))
         #expect(!UserFacingError.message(for: ProtonAPIError.secureRandomFailed).isEmpty)
     }
 }

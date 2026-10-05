@@ -54,9 +54,8 @@ enum UploadSourceError: Error, Sendable, Equatable {
     case changedDuringUpload
 
     /// Queue/UI message for `changedDuringUpload` (TransferFailure.permanent).
-    static func changedMessage(fileName: String) -> String {
-        "\(fileName) changed while it was uploading. Try again when it's no longer being written."
-    }
+    /// Name-free (F8.4-U2): the row shows the file name next to it.
+    static var changedMessage: String { UserFacingError.changedDuringUpload }
 }
 
 /// In-memory source (tests, the `data:` convenience).

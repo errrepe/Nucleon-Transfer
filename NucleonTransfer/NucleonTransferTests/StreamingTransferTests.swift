@@ -478,10 +478,10 @@ private func append(_ bytes: Data, to url: URL) throws {
     }
 
     @Test func changedFileMessageIsActionableAndSurvivesTheHeuristics() {
-        // The name contains keywords the string heuristics react to
-        // ("photo", "500"): the message must pass through untouched.
-        let msg = UploadSourceError.changedMessage(fileName: "photo500.jpg")
-        #expect(msg == "photo500.jpg changed while it was uploading. Try again when it's no longer being written.")
+        // F8.4-U2: name-free — the row shows the file name next to it, so
+        // keyword heuristics never see a name like "photo500.jpg".
+        let msg = UploadSourceError.changedMessage
+        #expect(msg == "This file changed while it was uploading. Try again once it's no longer being written.")
         #expect(UserFacingError.message(for: TransferFailure.permanent(msg)) == msg)
         #expect(UserFacingError.message(for: UploadSourceError.changedDuringUpload)
             .contains("changed while it was uploading"))

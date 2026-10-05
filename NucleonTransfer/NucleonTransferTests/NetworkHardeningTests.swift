@@ -205,7 +205,7 @@ struct NetworkHardeningTests {
             Issue.record("expected transient for 503")
             return
         }
-        #expect(UserFacingError.message(for: e).contains("Proton server error (503)"))
+        #expect(UserFacingError.message(for: e).contains("(Error 503)"))
     }
 
     // MARK: Retry-After capture (F8.2-R3)

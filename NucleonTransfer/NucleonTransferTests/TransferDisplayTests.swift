@@ -114,7 +114,8 @@ struct TransferDisplayTests {
         #expect(item.isFailed)
         #expect(!item.isActive)
         // Raw API strings are upgraded to actionable guidance.
-        #expect(item.subtitle.contains("server error"))
+        #expect(item.subtitle.contains("servers are having trouble"))
+        #expect(item.subtitle.hasSuffix("(Error 500)"))
     }
 
     @Test func cancelledUploadReadsCancelledNotRed() {

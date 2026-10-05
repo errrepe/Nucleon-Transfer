@@ -718,7 +718,7 @@ struct DownloadSignatureTests {
         #expect(UserFacingError.message(for: FileDownloadError.manifestSignatureMissing).contains("not signed"))
         #expect(UserFacingError.message(for: FileDownloadError.manifestSignatureUnverifiable).contains("author couldn't be verified"))
         #expect(UserFacingError.message(for: DecryptChainError.signatureMissing(what: "node passphrase"))
-            .contains("node passphrase"))
+            .contains("isn't signed"))
     }
 }
 
