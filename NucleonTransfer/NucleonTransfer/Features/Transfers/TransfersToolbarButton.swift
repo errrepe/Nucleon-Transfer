@@ -34,13 +34,15 @@ struct TransfersToolbarButton: View {
         Button {
             activity.presentTransfers.toggle()
         } label: {
-            // The badge rides on the ICON, not the button: macOS 26 clips
-            // toolbar items to their glass capsule, and a badge hung off
-            // the button's corner was cut in half (live check).
+            // The toolbar clips the item to its label's bounds, so a badge
+            // offset past the icon's edge was cut in half (live check, twice).
+            // The icon gets a fixed, slightly larger frame (stable whether
+            // or not a badge shows) and the badge sits inside its corner.
             Label {
                 Text("Transfers")
             } icon: {
                 Image(systemName: "arrow.up.arrow.down")
+                    .frame(width: 30, height: 22)
                     .overlay(alignment: .topTrailing) { badge }
             }
         }
@@ -100,7 +102,7 @@ struct TransfersToolbarButton: View {
             .foregroundStyle(.white)
             .frame(width: 9, height: 9)
             .background(.red, in: Circle())
-            .offset(x: -3, y: -3)
+            .offset(x: -3, y: -1)
             .accessibilityHidden(true)
     }
 
@@ -114,7 +116,6 @@ struct TransfersToolbarButton: View {
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(fill, in: Capsule())
-            .offset(x: 7, y: -6)
             .accessibilityHidden(true)
     }
 
