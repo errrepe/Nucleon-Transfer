@@ -34,6 +34,18 @@ final class UploadCoordinator {
     private let activity: TransferActivityStore
     private var started = false
     private var knownDone: Set<UUID> = []
+    /// Drop-level security grants still needed by unfinished jobs
+    /// (F8.2-R4). Released as soon as all of a drop's jobs finish — jobs
+    /// read through their own bookmarks (LocalFileAccess), so nothing has
+    /// to stay open for the whole session any more.
+    @ObservationIgnored private var grants = UploadGrantLedger<DropGrant>()
+
+    /// One `startAccessingSecurityScopedResource()` call (the same URL
+    /// dropped twice is two grants, each stopped once).
+    private struct DropGrant: Hashable, Sendable {
+        let token = UUID()
+        let url: URL
+    }
 
     init(
         queue: TransferQueue,
@@ -72,6 +84,7 @@ final class UploadCoordinator {
                         self.activity.remoteChanged(parentLinkIDs: parents)
                     }
                     self.knownDone = doneNow
+                    self.releaseFinishedGrants(in: snap)
                 }
             }
             await queue.start()
@@ -84,16 +97,32 @@ final class UploadCoordinator {
     /// queue and drops the uploader before calling this.
     func stop() async {
         await queue.setListener(nil)
+        await queue.flush()
+        for grant in grants.releaseAll() { grant.url.stopAccessingSecurityScopedResource() }
+    }
+
+    /// Stops the drop grants whose jobs are all finished (F8.2-R4).
+    private func releaseFinishedGrants(in snapshot: [TransferJob]) {
+        guard !grants.isEmpty else { return }
+        for grant in grants.releasable(in: snapshot) {
+            grant.url.stopAccessingSecurityScopedResource()
+        }
+    }
+
+    /// Writes any coalesced (not yet saved) queue change to disk now
+    /// (F8.2-R2). The app also flushes the queue itself on quit.
+    func flush() async {
+        await queue.flush()
     }
 
     // MARK: - intake
 
-    /// Enqueues `urls` (files and/or folders, structure preserved) under
-    /// `destination` — the folder on screen, not a share root. Same
-    /// semantics as the legacy `add(urls:)`: the security-scope grant is
-    /// held for the session, the directory scan runs in a detached task
-    /// off the main executor, and each file gets a best-effort
-    /// security-scoped bookmark. `breadcrumb` is the caller-computed
+    /// Enqueues `urls` (files and/or folders, structure preserved — a
+    /// dropped folder keeps its own top-level folder, F8.2-R6) under
+    /// `destination` — the folder on screen, not a share root. The
+    /// security-scope grant is held until this drop's jobs finish
+    /// (F8.2-R4), the directory scan runs in a detached task off the main
+    /// executor, and each file gets a best-effort security-scoped bookmark. `breadcrumb` is the caller-computed
     /// "My Files › Projects" label stored in `destinationNames`.
     func upload(urls: [URL], to destination: DriveLocation, breadcrumb: String) async {
         guard !urls.isEmpty else { return }
@@ -101,27 +130,39 @@ final class UploadCoordinator {
         defer { isAdding = false }
         lastError = nil
         for url in urls {
-            // Scoped access must be held on the MainActor before the worker
-            // reads; the queue persists bookmarks for later reads, so the
-            // grant is intentionally held for the session (see audit note).
-            _ = url.startAccessingSecurityScopedResource() // held for the session
+            // Scoped access must be held before the detached scan reads
+            // and creates bookmarks. It is kept only until this drop's jobs
+            // finish (F8.2-R4) — each job then reads through its own
+            // bookmark + scope (LocalFileAccess), also after a relaunch.
+            let granted = url.startAccessingSecurityScopedResource()
             do {
-                let entries: [LocalTreeScan.Entry]
                 var isDir: ObjCBool = false
-                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-                    // Directory scan is synchronous disk I/O: keep it off the
-                    // MainActor so large trees don't freeze the UI.
-                    entries = try await Task.detached(priority: .userInitiated) {
-                        try LocalTreeScan.collect(root: url).entries
-                    }.value
-                } else {
-                    entries = [LocalTreeScan.Entry(
-                        url: url,
-                        relativePath: url.lastPathComponent.precomposedStringWithCanonicalMapping,
-                        isDirectory: false,
-                        size: (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-                    )]
-                }
+                let isDirectory = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+                    && isDir.boolValue
+                // Scan + bookmark creation are synchronous disk I/O: keep
+                // them off the MainActor so large trees don't freeze the UI.
+                // Bookmarks are made here, during the scan, so the queue
+                // gets ONE batch enqueue (F8.2-R2 — per-file setBookmark
+                // saves made big drops quadratic).
+                let entries: [LocalTreeScan.Entry] = try await Task.detached(priority: .userInitiated) {
+                    let scanned: [LocalTreeScan.Entry]
+                    if isDirectory {
+                        // F8.2-R6: the dropped folder itself is preserved —
+                        // "Vacation" lands as Vacation/… in the destination.
+                        scanned = LocalTreeScan.rooted(
+                            try LocalTreeScan.collect(root: url).entries,
+                            rootName: url.lastPathComponent
+                        )
+                    } else {
+                        scanned = [LocalTreeScan.Entry(
+                            url: url,
+                            relativePath: url.lastPathComponent.precomposedStringWithCanonicalMapping,
+                            isDirectory: false,
+                            size: (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+                        )]
+                    }
+                    return LocalTreeScan.attachingBookmarks(scanned)
+                }.value
                 let adapter = DriveUploadAdapter(drive: drive, addressKeys: addressKeys, resolver: resolver)
                 let ids = try await queue.enqueueTree(
                     entries: entries,
@@ -129,15 +170,12 @@ final class UploadCoordinator {
                     rootParentLinkID: destination.linkID,
                     folders: adapter
                 )
-                // Best-effort bookmarks so jobs survive moves within the grant.
-                let files = entries.filter { !$0.isDirectory }
-                for (id, entry) in zip(ids, files) {
-                    let bookmark = try? entry.url.bookmarkData(
-                        options: .withSecurityScope,
-                        includingResourceValuesForKeys: nil,
-                        relativeTo: nil
-                    )
-                    await queue.setBookmark(id: id, bookmark)
+                if granted {
+                    if ids.isEmpty {
+                        url.stopAccessingSecurityScopedResource()
+                    } else {
+                        grants.hold(DropGrant(url: url), for: ids)
+                    }
                 }
                 for id in ids { destinationNames[id] = breadcrumb }
                 // Folder creation happened inside enqueueTree (parent→child):
@@ -145,10 +183,13 @@ final class UploadCoordinator {
                 activity.remoteChanged(parentLinkIDs: [destination.linkID])
                 activity.presentTransfers = true
             } catch {
+                if granted { url.stopAccessingSecurityScopedResource() }
                 lastError = "\(url.lastPathComponent): \(UserFacingError.message(for: error))"
             }
         }
         jobs = await queue.snapshot()
+        // Jobs that already finished before their grant was recorded.
+        releaseFinishedGrants(in: jobs)
     }
 
     /// Provider → file URLs (the drop-intake logic the retired queue

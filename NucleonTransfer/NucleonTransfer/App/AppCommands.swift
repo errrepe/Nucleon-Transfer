@@ -96,7 +96,8 @@ struct AppCommands: Commands {
         // with Finder's Add to Sidebar/bookmark conventions.
         CommandGroup(after: .pasteboard) {
             Button("Move to Trash") {
-                browser?.confirmingTrash = true
+                guard let browser else { return }
+                browser.requestTrash(browser.selection)
             }
             .keyboardShortcut(.delete, modifiers: [.command])
             .disabled(!canTrash)
@@ -153,9 +154,11 @@ struct AppCommands: Commands {
     }
 
     /// Signed in, or parked on the 2FA prompt (Sign Out doubles as the
-    /// cancel path there). Disabled mid-signIn/unlock — the in-flight
-    /// work must finish or fail on its own.
+    /// cancel path there). Disabled mid-signIn/unlock and while a 2FA code
+    /// is being verified — the in-flight work must finish or fail on its own.
     private var canSignOut: Bool {
-        session?.phase == .signedIn || session?.phase == .needsTwoFactor
+        guard let session else { return false }
+        if session.phase == .signedIn { return true }
+        return session.phase == .needsTwoFactor && !session.isVerifyingTwoFactor
     }
 }

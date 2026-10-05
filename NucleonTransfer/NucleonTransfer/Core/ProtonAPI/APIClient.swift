@@ -268,8 +268,24 @@ struct APIClient: Sendable {
             throw ProtonAPIError.transport(URLError(.badServerResponse))
         }
         if http.statusCode == 401 { throw ProtonAPIError.unauthorized }
+        let envelope = try? JSONDecoder().decode(ProtonEnvelope.self, from: data)
+        // F8.2-R3: retryable HTTP statuses (408/429/5xx) keep their status
+        // (+ Retry-After) even when the body carries a Proton envelope, so
+        // the transfer queue can back off instead of failing permanently.
+        // Exceptions: HV 9001 keeps its own case, and 2028 on /auth/ stays
+        // `.rateLimited` (login rate limit: never auto-retried).
+        if Self.isRetryableStatus(http.statusCode),
+           envelope?.code != 9001,
+           !(envelope?.code == 2028 && (request.url?.path.contains("/auth/") ?? false))
+        {
+            throw ProtonAPIError.http(
+                status: http.statusCode, code: envelope?.code,
+                message: envelope?.error ?? "body=\(redactedBodyPrefix(data))",
+                retryAfter: Self.retryAfter(http)
+            )
+        }
         // Proton nests payloads; envelope check for human-verification / 2FA signals
-        if let env = try? JSONDecoder().decode(ProtonEnvelope.self, from: data), env.code != 1000, env.code != 1001 {
+        if let env = envelope, env.code != 1000, env.code != 1001 {
             switch env.code {
             case 9001: throw ProtonAPIError.humanVerificationRequired
             case 2011, 2021: throw ProtonAPIError.needs2FA
@@ -291,7 +307,8 @@ struct APIClient: Sendable {
                 // Keep the HTTP status (retry classification needs it).
                 let env = try? JSONDecoder().decode(ProtonEnvelope.self, from: data)
                 throw ProtonAPIError.http(status: http.statusCode, code: env?.code,
-                                          message: env?.error ?? "body=\(body)")
+                                          message: env?.error ?? "body=\(body)",
+                                          retryAfter: Self.retryAfter(http))
             }
             if let env = try? JSONDecoder().decode(ProtonEnvelope.self, from: data) {
                 throw ProtonAPIError.api(code: env.code, message: "\(env.error ?? error.localizedDescription) body=\(body)")
@@ -315,7 +332,28 @@ struct APIClient: Sendable {
         if status == 401 { throw ProtonAPIError.unauthorized }
         let env = try? JSONDecoder().decode(ProtonEnvelope.self, from: data)
         throw ProtonAPIError.http(status: status, code: env?.code,
-                                  message: env?.error ?? "storage HTTP \(status)")
+                                  message: env?.error ?? "storage HTTP \(status)",
+                                  retryAfter: retryAfter(http))
+    }
+
+    /// 408 / 429 / 5xx: worth retrying with backoff (TRANSFERS.md §3).
+    static func isRetryableStatus(_ status: Int) -> Bool {
+        status == 408 || status == 429 || (500...599).contains(status)
+    }
+
+    /// Parses `Retry-After` (RFC 9110 §10.2.3): delay-seconds, or an
+    /// HTTP-date relative to `now`. Negative/garbage → nil.
+    static func retryAfter(_ response: HTTPURLResponse, now: Date = Date()) -> TimeInterval? {
+        guard let raw = response.value(forHTTPHeaderField: "Retry-After")?
+            .trimmingCharacters(in: .whitespaces), !raw.isEmpty
+        else { return nil }
+        if let seconds = Int(raw) { return seconds >= 0 ? TimeInterval(seconds) : nil }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "GMT")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = f.date(from: raw) else { return nil }
+        return max(0, date.timeIntervalSince(now))
     }
 
     /// First 600 bytes of a response body for decode-error diagnostics, with

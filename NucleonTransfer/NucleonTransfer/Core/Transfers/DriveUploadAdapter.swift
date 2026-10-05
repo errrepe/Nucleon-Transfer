@@ -7,6 +7,12 @@
 // (in-memory, on the resolver); file jobs whose remote parent was created
 // in a previous session now resolve remotely instead of failing — the
 // "re-add" fallback is gone.
+// F8.2-R4: the job's local file is opened through LocalFileAccess —
+// bookmark resolved + security scope started for the job's duration (and
+// stopped on every exit); a stale bookmark is re-created and persisted.
+// F8.2 review: a retry whose previous attempt already sent the commit first
+// verifies the draft (UploadCommitVerification — lost commit response), and
+// cancelled/removed jobs' drafts are discarded via `discardDraft`.
 
 import Foundation
 
@@ -15,11 +21,18 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
     private let drive: DriveClient
     private let addressKeys: [KeyringCache.UnlockedKey]
     private let resolver: NodeKeyResolver
+    private let files: LocalFileAccess
 
-    init(drive: DriveClient, addressKeys: [KeyringCache.UnlockedKey], resolver: NodeKeyResolver) {
+    init(
+        drive: DriveClient,
+        addressKeys: [KeyringCache.UnlockedKey],
+        resolver: NodeKeyResolver,
+        files: LocalFileAccess = .live
+    ) {
         self.drive = drive
         self.addressKeys = addressKeys
         self.resolver = resolver
+        self.files = files
     }
 
     // MARK: - TransferUploader
@@ -28,7 +41,34 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
         job: TransferJob,
         progress: @Sendable (Int64) async -> Void
     ) async throws -> String? {
-        let url = try localFileURL(for: job)
+        try await upload(job: job, progress: progress, events: TransferUploadEvents())
+    }
+
+    func upload(
+        job: TransferJob,
+        progress: @Sendable (Int64) async -> Void,
+        events: TransferUploadEvents
+    ) async throws -> String? {
+        // Lost commit response: the previous attempt's revision may be
+        // live already — then the job is done, nothing is re-uploaded.
+        let drive = self.drive
+        let shareID = job.shareID
+        if let committed = await UploadCommitVerification.alreadyCommitted(
+            job: job,
+            getLink: { try await drive.getLink(shareID: shareID, linkID: $0) }
+        ) {
+            await progress(job.bytesTotal)
+            return committed
+        }
+        // F8.2-R4: resolve the bookmark and hold its security scope for
+        // the whole job; `defer` balances it on success, failure and
+        // cancellation alike.
+        let opened = try files.open(job)
+        defer { files.close(opened) }
+        if let refreshed = opened.refreshedBookmark {
+            await events.bookmarkRefreshed(refreshed)
+        }
+        let url = opened.url
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -51,10 +91,28 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
             addressID: parent.addressID,
             signatureAddress: parent.signatureEmail,
             signatureEmail: parent.signatureEmail,
-            modificationTime: mtime
+            modificationTime: mtime,
+            clientUID: job.clientUID,
+            knownDraftLinkID: job.draftLinkID,
+            onDraftCreated: events.draftCreated,
+            onCommitSending: events.commitSending
         )
         await progress(Int64(data.count))
         return done.linkID
+    }
+
+    /// Deletes a cancelled/removed job's draft (delete_multiple on its
+    /// parent — DriveClient.deleteDraft, the FileDraftFlow path), never a
+    /// revision that got committed (UploadCommitVerification.discardDraft).
+    func discardDraft(job: TransferJob) async throws {
+        let drive = self.drive
+        let shareID = job.shareID
+        let parentLinkID = job.parentLinkID
+        try await UploadCommitVerification.discardDraft(
+            job: job,
+            getLink: { try await drive.getLink(shareID: shareID, linkID: $0) },
+            delete: { try await drive.deleteDraft(shareID: shareID, parentLinkID: parentLinkID, linkID: $0) }
+        )
     }
 
     // MARK: - RemoteFolderCreator
@@ -101,27 +159,5 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
         let ctx = try await resolver.folder(shareID: shareID, linkID: linkID)
         await resolver.register(createdFolder: ctx)
         return linkID
-    }
-
-    // MARK: - local files
-
-    /// Prefers the enqueue-time path; falls back to the security-scoped
-    /// bookmark (survives moves/renames within a session grant).
-    private func localFileURL(for job: TransferJob) throws -> URL {
-        if FileManager.default.fileExists(atPath: job.localPath) {
-            return URL(fileURLWithPath: job.localPath)
-        }
-        if let bookmark = job.localBookmark {
-            var stale = false
-            if let url = try? URL(
-                resolvingBookmarkData: bookmark,
-                options: .withSecurityScope,
-                relativeTo: nil,
-                bookmarkDataIsStale: &stale
-            ), FileManager.default.fileExists(atPath: url.path) {
-                return url
-            }
-        }
-        throw TransferFailure.permanent("local file missing — re-add \(job.fileName)")
     }
 }

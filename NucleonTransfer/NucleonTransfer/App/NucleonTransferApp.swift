@@ -3,6 +3,9 @@
 // menu commands (AppCommands), and the Settings scene. The launch `.task`
 // applies the persisted "simultaneous uploads" cap to the TransferQueue;
 // the Settings stepper writes the same key and applies on change.
+// Quit (F8.2-R2): the queue coalesces its snapshot writes, so termination
+// is deferred until `TransferQueue.flush()` has written pending changes.
+import AppKit
 import SwiftUI
 
 @main
@@ -14,12 +17,14 @@ struct NucleonTransferApp: App {
     #else
     @State private var session = AppSession()
     #endif
+    @NSApplicationDelegateAdaptor(AppQuitFlush.self) private var quitFlush
 
     var body: some Scene {
         Window("Nucleon Transfer", id: "main") {
             RootView()
                 .environment(session)
                 .task {
+                    quitFlush.flush = { [queue = session.queue] in await queue.flush() }
                     let stored = UserDefaults.standard.integer(
                         forKey: AppSettings.maxConcurrentUploadsKey
                     )
@@ -38,5 +43,25 @@ struct NucleonTransferApp: App {
             SettingsView()
                 .environment(session)
         }
+    }
+}
+
+/// Defers app termination until the upload queue's coalesced snapshot is
+/// on disk. Synchronous delegate method on purpose (no async @objc thunk —
+/// swift-frontend 6.4 crashes on those); the flush runs in a MainActor
+/// Task and replies when done.
+@MainActor
+final class AppQuitFlush: NSObject, NSApplicationDelegate {
+    var flush: (@Sendable () async -> Void)?
+    private var flushing = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let flush, !flushing else { return .terminateNow }
+        flushing = true
+        Task { @MainActor in
+            await flush()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }

@@ -40,21 +40,23 @@ final class TransferActivityStore {
         return rec.id
     }
 
-    /// Per-block progress while downloading (0…1, clamped; unknown ids are
-    /// ignored so a cleared record can't resurrect).
+    /// Per-block progress while downloading (0…1, clamped). Unknown ids
+    /// are ignored so a cleared record can't resurrect, and so is progress
+    /// for a finished/cancelled record — a late hop can't put a bar back on
+    /// a done row (F8.2-R5, DownloadRecord.applyProgress).
     func downloadProgress(id: UUID, fraction: Double) {
         guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
-        downloads[i].progress = min(max(fraction, 0), 1)
+        downloads[i].applyProgress(fraction)
     }
 
+    /// Terminal transitions only apply to in-flight records (DownloadRecord
+    /// transitions): a cancelled download never flips to done or failed.
     func downloadFinished(id: UUID, fileCount: Int, destination: URL?, reveal: URL? = nil) {
-        guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
-        downloads[i].state = .done
-        downloads[i].fileCount = fileCount
-        if let destination { downloads[i].destinationName = destination.lastPathComponent }
-        downloads[i].progress = nil
-        downloads[i].errorMessage = nil
-        downloads[i].updatedAt = Date()
+        guard let i = downloads.firstIndex(where: { $0.id == id }),
+              downloads[i].finish(
+                  fileCount: fileCount, destinationName: destination?.lastPathComponent
+              )
+        else { return }
         if let reveal {
             revealURLs[id] = reveal
         } else if let destination {
@@ -64,14 +66,17 @@ final class TransferActivityStore {
 
     func downloadFailed(id: UUID, error: Error) {
         guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
-        downloads[i].state = .failed
-        downloads[i].progress = nil
-        downloads[i].errorMessage = UserFacingError.message(for: error)
-        downloads[i].updatedAt = Date()
+        downloads[i].fail(message: UserFacingError.message(for: error))
+    }
+
+    /// User cancel or sign-out (F8.2-R5): neutral "Cancelled", not a failure.
+    func downloadCancelled(id: UUID) {
+        guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
+        downloads[i].cancel()
     }
 
     func clearFinished() {
-        let keep = downloads.filter { $0.state != .done && $0.state != .failed }
+        let keep = downloads.filter { $0.state == .downloading }
         let removed = Set(downloads.map(\.id)).subtracting(keep.map(\.id))
         downloads = keep
         for id in removed { revealURLs.removeValue(forKey: id) }

@@ -47,7 +47,14 @@ final class BrowserModel {
     /// Drives the New Folder sheet (toolbar + empty-area context menu).
     var showingNewFolder = false
     /// Drives the "Move to Trash" confirmationDialog (toolbar + menu).
+    /// Set through `requestTrash(_:)` so `pendingTrash` is always filled.
     var confirmingTrash = false
+    /// The items the open trash confirmation will act on (F8.2-R8). The
+    /// context menu passes the CLICKED rows — right-clicking an unselected
+    /// row doesn't move the selection on macOS — while the toolbar and ⌘⌫
+    /// pass the selection. The dialog counts and trashes exactly this set;
+    /// cleared on confirm/cancel.
+    var pendingTrash: Set<DriveItem.ID> = []
     /// Message for the action-failure alert (trash/create); nil = hidden.
     var actionError: String?
     /// Mirrors the activity store's remote-changed token so views can key
@@ -59,6 +66,8 @@ final class BrowserModel {
     /// environment by BrowserContainerView so children (e.g. the S3.2
     /// transfers button) see the same instance, previews included.
     let session: AppSession
+    /// Orders overlapping listings and hides optimistic removals (F8.2-R7).
+    @ObservationIgnored private var loadGate = FolderLoadGate()
     /// DEBUG preview seam: when true, `load` is a no-op so seeded folder
     /// states render offline (see `BrowserModel.preview` below).
     private var previewStubbed = false
@@ -102,32 +111,49 @@ final class BrowserModel {
     /// contents may have changed. Keeps the previous rows on screen while
     /// the refresh is in flight (no flicker). A `401` means the session is
     /// gone → sign out so the whole app returns to the login screen.
+    /// F8.2-R7: overlapping loads of one folder are ordered by `loadGate` —
+    /// only the latest request applies its result, optimistic trash
+    /// removals stay hidden from listings that predate them, and the
+    /// state is re-read after the await (a stale flag set meanwhile
+    /// survives, so the next visit refetches).
     func load(_ loc: DriveLocation, force: Bool = false) async {
         if previewStubbed { return }
-        var state = state(for: loc)
-        if state.phase == .loaded, !force, !state.isStale { return }
-        state.phase = .loading
-        state.isStale = false
-        folders[loc.linkID] = state
+        let cached = state(for: loc)
+        if cached.phase == .loaded, !force, !cached.isStale { return }
+        // A listing of this folder is already in flight and nothing marked
+        // it stale since: it will publish — don't start a duplicate.
+        if cached.phase == .loading, !force, !cached.isStale { return }
+        let token = loadGate.begin(folder: loc.linkID)
+        var starting = cached
+        starting.phase = .loading
+        starting.isStale = false
+        folders[loc.linkID] = starting
         guard let listing = session.listing else {
-            state.phase = .failed("Session not ready. Sign in again.")
-            folders[loc.linkID] = state
+            folders[loc.linkID]?.phase = .failed("Session not ready. Sign in again.")
             return
         }
         do {
             let items = try await listing.children(of: loc)
             // Sign-out mid-flight replaced/nilled the listing: drop the
             // result instead of showing another session's data.
-            guard session.listing === listing else { return }
-            state.items = items
+            guard session.listing === listing,
+                  let visible = loadGate.apply(items, token: token, folder: loc.linkID)
+            else { return }
+            var state = state(for: loc)
+            state.items = visible
             state.phase = .loaded
             folders[loc.linkID] = state
         } catch let error as ProtonAPIError where error == .unauthorized {
+            // Only the session that produced this listing may be signed
+            // out — a late 401 from an old session must not end a new one.
+            guard session.listing === listing else { return }
             await session.signOut(reason: "Your session expired. Sign in again.")
         } catch {
-            guard session.listing === listing else { return }
-            state.phase = .failed(UserFacingError.message(for: error))
-            folders[loc.linkID] = state
+            guard session.listing === listing,
+                  loadGate.isCurrent(token, folder: loc.linkID)
+            else { return }
+            folders[loc.linkID, default: FolderState()].phase =
+                .failed(UserFacingError.message(for: error))
         }
     }
 
@@ -254,21 +280,45 @@ final class BrowserModel {
         selection = [linkID]
     }
 
+    /// Opens the trash confirmation for `ids` (F8.2-R8). No-op on an empty
+    /// set or a read-only root.
+    func requestTrash(_ ids: Set<DriveItem.ID>) {
+        guard !ids.isEmpty, root.allowsWrites else { return }
+        pendingTrash = ids
+        confirmingTrash = true
+    }
+
+    /// The dialog's destructive button: trashes `pendingTrash` and clears it.
+    func confirmTrash() {
+        let ids = pendingTrash
+        pendingTrash = []
+        Task { await trashItems(ids) }
+    }
+
+    /// The dialog's cancel path (button, Esc, click-away).
+    func cancelTrash() {
+        pendingTrash = []
+    }
+
     /// Optimistic trash (S2.3/6.3): rows leave the cache immediately, then
     /// the batch endpoint runs; `remoteChanged` marks the parent stale →
     /// reload. A failure force-reloads (rows come back) and lands in
-    /// `actionError` for the view's alert.
+    /// `actionError` for the view's alert. F8.2-R7: the removal is
+    /// registered with `loadGate`, so a listing requested before the
+    /// trash landed can't bring the rows back.
     func trashItems(_ ids: Set<DriveItem.ID>) async {
         let items = selectedItems(ids)
         guard !items.isEmpty, let ops = session.folderOps else { return }
         let loc = current
-        var state = state(for: loc)
-        state.items.removeAll { ids.contains($0.id) }
-        folders[loc.linkID] = state
+        let removed = Set(items.map(\.id))
+        let handle = loadGate.beginRemoval(removed, folder: loc.linkID)
+        folders[loc.linkID]?.items.removeAll { removed.contains($0.id) }
         selection.subtract(ids)
         do {
             try await ops.trash(items, in: loc)
+            loadGate.finishRemoval(handle, folder: loc.linkID, succeeded: true)
         } catch {
+            loadGate.finishRemoval(handle, folder: loc.linkID, succeeded: false)
             await load(loc, force: true)
             actionError = UserFacingError.message(for: error)
         }

@@ -328,7 +328,7 @@ struct RedirectGuardTests {
                 bareURL: "https://zrh-storage.proton.me/storage/blocks",
                 token: "t", uid: "u", accessToken: "a")
         } throws: { error in
-            guard case let .http(status, _, _) = error as? ProtonAPIError else { return false }
+            guard case let .http(status, _, _, _) = error as? ProtonAPIError else { return false }
             return status == 302
         }
         #expect(redirectRequests().map(\.host) == ["zrh-storage.proton.me"])

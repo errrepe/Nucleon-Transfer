@@ -113,7 +113,10 @@ struct FolderTable: View {
                 }
                 Button("Download…") { model.downloadItems(ids) }
                 Divider()
-                Button("Move to Trash") { model.confirmingTrash = true }
+                // F8.2-R8: the clicked rows, never `model.selection` — a
+                // right-click on an unselected row leaves the selection
+                // where it was.
+                Button("Move to Trash") { model.requestTrash(ids) }
                     .disabled(!model.root.allowsWrites)
             }
         } primaryAction: { ids in

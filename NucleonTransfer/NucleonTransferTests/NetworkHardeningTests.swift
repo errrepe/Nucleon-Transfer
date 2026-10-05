@@ -15,6 +15,7 @@ import Testing
 private struct StubState: Sendable {
     var status = 200
     var body = Data()
+    var headers: [String: String] = [:]
     var requests: [URL] = []
 }
 
@@ -26,11 +27,11 @@ private final class StubURLProtocol: URLProtocol {
 
     override func startLoading() {
         let url = request.url ?? URL(string: "about:blank")!
-        let (status, body) = stubState.withLock { state in
+        let (status, body, headers) = stubState.withLock { state in
             state.requests.append(url)
-            return (state.status, state.body)
+            return (state.status, state.body, state.headers)
         }
-        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
@@ -39,8 +40,8 @@ private final class StubURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-private func stubbedClient(status: Int, body: Data = Data()) -> APIClient {
-    stubState.withLock { $0 = StubState(status: status, body: body, requests: []) }
+private func stubbedClient(status: Int, body: Data = Data(), headers: [String: String] = [:]) -> APIClient {
+    stubState.withLock { $0 = StubState(status: status, body: body, headers: headers, requests: []) }
     let config = APIClient.makeConfiguration()
     config.protocolClasses = [StubURLProtocol.self]
     var api = APIClient()
@@ -191,19 +192,71 @@ struct NetworkHardeningTests {
         await #expect {
             _ = try await api.get(ProtonEnvelope.self, path: "/drive/shares", uid: "u", accessToken: "a")
         } throws: { error in
-            guard case let .http(status, code, _) = error as? ProtonAPIError else { return false }
+            guard case let .http(status, code, _, _) = error as? ProtonAPIError else { return false }
             return status == 502 && code == nil
         }
     }
 
-    // MARK: classification unchanged (non-2xx storage stays permanent until R3)
+    // MARK: classification (F8.2-R3: retryable statuses are transient)
 
     @Test func httpErrorClassificationAndMessage() {
         let e = ProtonAPIError.http(status: 503, code: nil, message: "storage HTTP 503")
-        guard case .permanent = TransferErrorClassify.classify(e) else {
-            Issue.record("expected permanent (pre-R3 behaviour)")
+        guard case .transient = TransferErrorClassify.classify(e) else {
+            Issue.record("expected transient for 503")
             return
         }
         #expect(UserFacingError.message(for: e).contains("Proton server error (503)"))
+    }
+
+    // MARK: Retry-After capture (F8.2-R3)
+
+    @Test func storage429CarriesRetryAfterSeconds() async {
+        let api = stubbedClient(status: 429, headers: ["Retry-After": "7"])
+        await #expect(throws: ProtonAPIError.http(status: 429, code: nil, message: "storage HTTP 429", retryAfter: 7)) {
+            _ = try await api.downloadRawBlock(
+                bareURL: "https://zrh-storage.proton.me/storage/blocks",
+                token: "t", uid: "u", accessToken: "a")
+        }
+    }
+
+    @Test func api503WithEnvelopeKeepsStatusAndRetryAfter() async {
+        let body = Data(#"{"Code":2032,"Error":"Service unavailable"}"#.utf8)
+        let api = stubbedClient(status: 503, body: body, headers: ["Retry-After": "12"])
+        await #expect(throws: ProtonAPIError.http(status: 503, code: 2032, message: "Service unavailable", retryAfter: 12)) {
+            _ = try await api.get(ProtonEnvelope.self, path: "/drive/shares", uid: "u", accessToken: "a")
+        }
+    }
+
+    @Test func api429On2028OutsideAuthIsRetryable() async {
+        let body = Data(#"{"Code":2028,"Error":"Too many requests"}"#.utf8)
+        let api = stubbedClient(status: 429, body: body, headers: ["Retry-After": "3"])
+        await #expect {
+            _ = try await api.get(ProtonEnvelope.self, path: "/drive/shares", uid: "u", accessToken: "a")
+        } throws: { error in
+            guard case let .http(429, 2028, _, retryAfter) = error as? ProtonAPIError else { return false }
+            return retryAfter == 3
+        }
+    }
+
+    @Test func login2028StaysRateLimited() async {
+        let body = Data(#"{"Code":2028,"Error":"Too many recent logins"}"#.utf8)
+        let api = stubbedClient(status: 429, body: body)
+        await #expect(throws: ProtonAPIError.rateLimited) {
+            _ = try await api.get(ProtonEnvelope.self, path: "/auth/v4/info", uid: "u", accessToken: "a")
+        }
+    }
+
+    @Test func retryAfterParsesSecondsAndHTTPDate() throws {
+        func response(_ value: String) throws -> HTTPURLResponse {
+            try #require(HTTPURLResponse(
+                url: URL(string: "https://drive-api.proton.me/x")!, statusCode: 429,
+                httpVersion: "HTTP/1.1", headerFields: ["Retry-After": value]))
+        }
+        #expect(APIClient.retryAfter(try response("120")) == 120)
+        #expect(APIClient.retryAfter(try response("-5")) == nil)
+        #expect(APIClient.retryAfter(try response("soon")) == nil)
+        let now = Date(timeIntervalSince1970: 1_700_000_000) // Tue, 14 Nov 2023 22:13:20 GMT
+        let date = APIClient.retryAfter(try response("Tue, 14 Nov 2023 22:14:00 GMT"), now: now)
+        #expect(date == 40)
     }
 }

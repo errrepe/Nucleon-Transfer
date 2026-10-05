@@ -9,6 +9,26 @@
 - SwiftUI `.onDrop(of: [.fileURL], ...)` → `[NSItemProvider]`.
 - Cada provider com `hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)` → `loadItem(forTypeIdentifier:options:)` → `URL` (security-scoped, chamar `startAccessingSecurityScopedResource()`).
 - Suporta arquivos + pastas. Preserva estrutura relativa ao ponto de drop.
+- **Pasta de topo preservada (F8.2-R6):** soltar a pasta "Férias" cria
+  `Férias/` na pasta de destino e sobe o conteúdo dentro dela
+  (`LocalTreeScan.rooted` re-enraíza o scan sob o nome da pasta, NFC;
+  `enqueueTree` cria a raiz como qualquer outra pasta). Várias pastas
+  soltas juntas mantêm cada uma a sua raiz; arquivos soltos avulsos vão
+  direto para a pasta atual. Pasta vazia também é criada. Conflito de nome
+  na raiz segue `FolderConflictPolicy` (pasta existente com o mesmo nome →
+  mescla dentro dela; arquivo com o mesmo nome → falha com mensagem).
+- Acesso no sandbox (F8.2-R4): o grant da URL solta fica aberto só até os
+  jobs daquele drop terminarem (done/failed/cancelled ou removidos); cada
+  job lê o arquivo pelo próprio bookmark security-scoped, com
+  `startAccessingSecurityScopedResource()` durante o job e `stop`
+  balanceado, inclusive após relançar o app (entitlement
+  `com.apple.security.files.bookmarks.app-scope`). Bookmark stale é
+  recriado e persistido no job.
+- Enfileiramento (F8.2-R2): bookmarks criados durante o scan (fora do
+  MainActor) e um único `enqueueMany` por drop; snapshot com save
+  coalescido (~500 ms), envelope versionado `{schemaVersion, jobs}`
+  decodificado job a job, `.bak` do arquivo original se algo não
+  decodificar, flush ao sair do app.
 
 ### 1.2 Enumeração recursiva
 
@@ -41,7 +61,9 @@
   Pastas NÃO carregam `XAttr` (ausente nas pastas oficiais).
   Share tipo Photo rejeita criação (2511) — criar só em shares Drive.
 - Memoiza `relativePath → nodeID` em memória + persiste no `TransferJob` para retry idempotente.
-- Conflito de nome: sufixo ` (1)`, ` (2)` — nunca sobrescreve silenciosamente.
+- Conflito de nome (F7.1 R4): pasta existente com o mesmo nome → mescla
+  (reusa o LinkID); arquivo com o mesmo nome → falha. Nunca sobrescreve
+  nem renomeia silenciosamente (`FolderConflictPolicy`).
 
 ### 1.4 Chunking + encrypt + upload
 
@@ -93,8 +115,27 @@
 ### 2.2 Espelho da árvore
 
 - Lista recursiva remota (`GET /drive/v4/nodes/{id}/children` + eventos) → constrói árvore.
-- Cria diretórios locais primeiro (`FileManager.createDirectory(withIntermediateDirectories:true)`).
-- Escreve via arquivo temporário `*.nucleon-part` → `rename` atômico ao verificar.
+- Pasta de topo preservada (F8.2-R6): baixar a pasta remota "Vacation" para o
+  destino escolhido cria `<destino>/Vacation/…`; se "Vacation" já existe
+  localmente, vira "Vacation (1)" — nunca mescla numa pasta do usuário. O nome
+  passa por `safeSubdirectory` (sanitize + contenção, raiz = destino escolhido).
+  Arquivo único continua indo direto para o destino.
+- Cria diretórios locais primeiro, de forma exclusiva (`createDirectory` sem
+  intermediários). Nomes (arquivos e pastas) são reservados no ator
+  `DownloadPlacement` (F8.2-R5) com chave case-folded + NFC por diretório:
+  irmãos remotos que só diferem por caixa ou normalização (`A.txt` / `a.txt`,
+  `Docs` / `docs`) ganham nomes locais distintos (`a (1).txt`, `docs (1)`) no
+  APFS case-insensitive, em vez de um apagar o outro ou as pastas mesclarem.
+- Escreve via arquivo temporário único `.<nome>.<uuid>.nucleon-part` → `rename`
+  EXCLUSIVO (`renamex_np(RENAME_EXCL)`; `link`+`unlink` em volumes sem
+  suporte). Nunca há `removeItem` do destino: se o nome existir no momento do
+  move, usa o próximo sufixo livre " (n)" e tenta de novo.
+- Cancelamento (F8.2-R5): cada download tem uma Task em `DownloadCoordinator`
+  (`cancel(id)` pelo botão/menu de contexto da linha, `cancelAll()` no
+  sign-out antes de descartar as chaves). Checado entre blocos e entre
+  arquivos; o `.nucleon-part` é removido e o registro fica `cancelled` (não
+  `failed`). Arquivos já concluídos de uma pasta cancelada permanecem.
+  Progresso que chega depois do fim é ignorado.
 - Downloads em voo de antes do rename (RN1, 2026-10-03) podem ter deixado
   órfãos arquivos `*-part` com o prefixo antigo ao lado do destino: um retry
   no mesmo destino sobrescreve o órfão, e os demais são seguros de apagar.
@@ -117,6 +158,21 @@ maxAttempts por bloco = 5, por job = persistente com contador
 
 - 429: respeita `Retry-After` se presente.
 - HV 9001: pausa fila inteira, surface UI, resume manual.
+- F8.2-R3 (implementado): `APIClient` preserva o status HTTP de 408/429/5xx
+  mesmo com envelope Proton no corpo (`ProtonAPIError.http(status:code:message:retryAfter:)`;
+  exceções: 9001 e 2028 em `/auth/`) e captura `Retry-After` (segundos ou
+  HTTP-date). A fila classifica pelo status (408/429/5xx transitórios) e
+  espera `max(backoff, Retry-After)` (Retry-After limitado a 5 min) + jitter.
+  Cancelamento (`CancellationError`, `URLError.cancelled`, inclusive
+  embrulhado em `.transport`) nunca é falha (F8.2-R1).
+- Drafts (F8.2-R3): cada job tem um `ClientUID` persistido, enviado no
+  draft (`ClientUID`, SDK C# `FileCreationRequest.cs`). Antes de criar o
+  draft, e mais uma vez após um 2500, o probe `checkAvailableHashes` é
+  comparado com o `ClientUID` (ou com o `draftLinkID` persistido por uma
+  tentativa anterior); drafts nossos são apagados via `delete_multiple`
+  no pai (Proton-API-Bridge `handleRevisionConflict`). Drafts de outros
+  clientes nunca são tocados. Falha após o draft existir apaga o draft
+  (best-effort, task não-cancelada).
 
 ## 4. Progresso / Pausa / Cancela / Retry
 

@@ -50,6 +50,19 @@ struct TransferRow: View {
             actionButtons
         }
         .padding(.vertical, 2)
+        .contextMenu { contextActions }
+    }
+
+    /// Same actions as the icon buttons, as text items (F8.2-R5: "Cancel"
+    /// reachable by right-click too). Empty for rows without actions.
+    @ViewBuilder
+    private var contextActions: some View {
+        if let pause = actions.pause { Button("Pause", action: pause) }
+        if let resume = actions.resume { Button("Resume", action: resume) }
+        if let retry = actions.retry { Button("Retry", action: retry) }
+        if let reveal = actions.reveal { Button("Show in Finder", action: reveal) }
+        if let cancel = actions.cancel { Button("Cancel", action: cancel) }
+        if let remove = actions.remove { Button("Remove", action: remove) }
     }
 
     @ViewBuilder
@@ -69,6 +82,7 @@ struct TransferRow: View {
         }
         if let cancel = actions.cancel {
             rowButton("Cancel", systemImage: "xmark.circle", action: cancel)
+                .accessibilityLabel("Cancel \(item.name)")
         }
         if let remove = actions.remove {
             rowButton("Remove", systemImage: "xmark.circle", action: remove)
