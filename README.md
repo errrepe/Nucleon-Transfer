@@ -105,9 +105,10 @@ plus `NucleonTransfer/NucleonTransferTests/` directly.
 - **Sign-out** revokes the session server-side (`DELETE /auth/v4`,
   best-effort) and drops all in-memory key material, zeroing what it owns.
 - **On disk:** the upload queue (`transfer-queue.json` under Application
-  Support — paths, IDs and progress, no secrets), preferences and the last
-  username (UserDefaults, not secret), and — only when opted in — the
-  Keychain items above.
+  Support — paths, IDs and progress, no secrets), preferences (UserDefaults),
+  and — only when "Keep me signed in" is on — the last username
+  (UserDefaults, not secret, cleared at sign-in/sign-out with it off) and
+  the Keychain items above.
 - No telemetry, no analytics, no third-party crash reporters.
 - Every request sends an honest `x-pm-appversion:
   external-drive-nucleon_transfer@0.1.0-alpha` header — the app never

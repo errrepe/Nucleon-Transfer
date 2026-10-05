@@ -1,7 +1,7 @@
 // Nucleon Transfer — F8.5-V2 "Keep me signed in" integration (Swift Testing).
 // SessionManager.restore over a fake SessionAuthAPI (success, rejected
-// token, network failure), the token observer (refresh / adopt / signOut /
-// discard), the refresh body without an access token, the RestoreFailure
+// token, network failure), the ordered `tokenChanges` stream (refresh /
+// adopt / signOut / discard), the refresh body without an access token, the RestoreFailure
 // keep-vs-delete policy and the sign-in settings keys. Offline only.
 import Foundation
 import Synchronization
@@ -41,14 +41,16 @@ private final class RestoreAuthAPI: SessionAuthAPI {
     }
 }
 
-/// Records every observer call in order.
-private final class TokenLog: Sendable {
-    private let events = Mutex([SessionTokens?]())
-    var all: [SessionTokens?] { events.withLock { $0 } }
-
-    func observer() -> @Sendable (SessionTokens?) async -> Void {
-        { [self] tokens in events.withLock { $0.append(tokens) } }
+/// The first `count` events of `manager.tokenChanges`, in order. The
+/// stream buffers everything, so this can run after the calls.
+private func takeTokens(_ count: Int, from manager: SessionManager) async -> [SessionTokens?] {
+    var iterator = manager.tokenChanges.makeAsyncIterator()
+    var events: [SessionTokens?] = []
+    for _ in 0..<count {
+        guard let event = await iterator.next() else { break }
+        events.append(event)
     }
+    return events
 }
 
 struct SessionRestoreTests {
@@ -57,16 +59,15 @@ struct SessionRestoreTests {
     @Test func restoreRefreshesAndAdoptsTheSession() async throws {
         let api = RestoreAuthAPI()
         let manager = SessionManager(authAPI: api)
-        let log = TokenLog()
-        await manager.setTokenObserver(log.observer())
 
         try await manager.restore(uid: "uid", refreshToken: "stored-refresh")
 
         #expect(api.refreshes.map(\.refreshToken) == ["stored-refresh"])
         #expect(api.refreshes.first?.accessToken == nil)
         #expect(await manager.credentials() == ProtonSession(uid: "uid", accessToken: "access-1", refreshToken: "refresh-1"))
-        // The rotated token reached the observer (→ vault.updateTokens).
-        #expect(log.all == [SessionTokens(uid: "uid", refreshToken: "refresh-1")])
+        // The rotated token is on the stream (→ vault.updateTokens), and
+        // restore returned without anyone consuming it.
+        #expect(await takeTokens(1, from: manager) == [SessionTokens(uid: "uid", refreshToken: "refresh-1")])
         // withAuth now runs with the fresh access token.
         let token = try await manager.withAuth { _, token in token }
         #expect(token == "access-1")
@@ -75,14 +76,12 @@ struct SessionRestoreTests {
     @Test func restoreWithRejectedTokenClearsSessionAndThrows() async {
         let api = RestoreAuthAPI(failure: ProtonAPIError.api(code: 10013, message: "Invalid refresh token"))
         let manager = SessionManager(authAPI: api)
-        let log = TokenLog()
-        await manager.setTokenObserver(log.observer())
 
         await #expect(throws: ProtonAPIError.api(code: 10013, message: "Invalid refresh token")) {
             try await manager.restore(uid: "uid", refreshToken: "dead")
         }
         #expect(await manager.isSignedIn == false)
-        #expect(log.all == [nil])
+        #expect(await takeTokens(1, from: manager) == [nil])
         #expect(api.deleteCount == 0)   // nothing to revoke: it never had an access token
     }
 
@@ -109,19 +108,19 @@ struct SessionRestoreTests {
         #expect(RestoreFailure.decision(for: ProtonAPIError.unauthorized) == .forget)
     }
 
-    // MARK: token observer
+    // MARK: token stream
 
-    @Test func observerFiresOnEveryRefreshAndOnSignOut() async throws {
+    @Test func streamCarriesEveryChangeInOrder() async throws {
         let api = RestoreAuthAPI()
         let manager = SessionManager(authAPI: api)
-        let log = TokenLog()
-        await manager.setTokenObserver(log.observer())
         await manager.adopt(ProtonSession(uid: "uid", accessToken: "access-0", refreshToken: "refresh-0"))
         try await manager.refresh()
         try await manager.refresh()
         await manager.signOut()
 
-        #expect(log.all == [
+        // Nobody consumed while the refreshes ran: the network path never
+        // waits for the Keychain writer.
+        #expect(await takeTokens(4, from: manager) == [
             SessionTokens(uid: "uid", refreshToken: "refresh-0"),
             SessionTokens(uid: "uid", refreshToken: "refresh-1"),
             SessionTokens(uid: "uid", refreshToken: "refresh-2"),
@@ -133,23 +132,21 @@ struct SessionRestoreTests {
     @Test func discardEndsLocallyWithoutRevoking() async {
         let api = RestoreAuthAPI()
         let manager = SessionManager(authAPI: api)
-        let log = TokenLog()
         await manager.adopt(ProtonSession(uid: "uid", accessToken: "a", refreshToken: "r"))
-        await manager.setTokenObserver(log.observer())
         await manager.discard()
         #expect(await manager.isSignedIn == false)
         #expect(api.deleteCount == 0)
-        #expect(log.all == [nil])
+        #expect(await takeTokens(2, from: manager) == [SessionTokens(uid: "uid", refreshToken: "r"), nil])
     }
 
     @Test func refreshFailureDoesNotNotify() async {
         let api = RestoreAuthAPI(failure: ProtonAPIError.unauthorized)
         let manager = SessionManager(authAPI: api)
         await manager.adopt(ProtonSession(uid: "uid", accessToken: "a", refreshToken: "r"))
-        let log = TokenLog()
-        await manager.setTokenObserver(log.observer())
         await #expect(throws: ProtonAPIError.unauthorized) { try await manager.refresh() }
-        #expect(log.all.isEmpty)
+        await manager.discard()
+        // adopt, then straight to the discard: the failed refresh added nothing.
+        #expect(await takeTokens(2, from: manager) == [SessionTokens(uid: "uid", refreshToken: "r"), nil])
     }
 
     @Test func tokensDescriptionIsRedacted() {
@@ -159,21 +156,21 @@ struct SessionRestoreTests {
         }
     }
 
-    /// Rotation end to end: observer → SessionVault.updateTokens keeps the
+    /// Rotation end to end: stream → SessionVault.updateTokens keeps the
     /// stored salted key password and tracks the newest refresh token.
-    @Test func observerDrivenRotationUpdatesVault() async throws {
+    @Test func streamDrivenRotationUpdatesVault() async throws {
         let store = InMemoryKeychainStore()
         let vault = SessionVault(store: store)
         let salted = Data(repeating: 7, count: 31)
         try await vault.save(RememberedSession(uid: "uid", refreshToken: "stored",
                                                saltedKeyPass: salted, username: "u"))
         let manager = SessionManager(authAPI: RestoreAuthAPI())
-        await manager.setTokenObserver { tokens in
-            guard let tokens else { return }
-            _ = try? await vault.updateTokens(uid: tokens.uid, refreshToken: tokens.refreshToken)
-        }
         try await manager.restore(uid: "uid", refreshToken: "stored")
         try await manager.refresh()
+        // The consumer applies the events in order, after the fact.
+        for case let tokens? in await takeTokens(2, from: manager) {
+            try await vault.updateTokens(uid: tokens.uid, refreshToken: tokens.refreshToken)
+        }
 
         let loaded = try #require(await vault.load())
         #expect(loaded.refreshToken == "refresh-2")
@@ -240,6 +237,70 @@ struct SessionRestoreTests {
         #expect(AppSettings.lastUsername(defaults) == "user@proton.me")
         defaults.set(true, forKey: AppSettings.keepSignedInKey)
         #expect(AppSettings.keepsSignedIn(defaults))
+    }
+
+    /// F8.5 review: the last username follows "Keep me signed in".
+    @Test func lastUsernameOnlyWithKeepSignedIn() {
+        let name = "nt.tests.restore.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name) ?? .standard
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        AppSettings.recordSignIn(username: "off@proton.me", in: defaults)
+        #expect(AppSettings.lastUsername(defaults) == nil)
+
+        AppSettings.setKeepsSignedIn(true, in: defaults)
+        AppSettings.recordSignIn(username: " on@proton.me ", in: defaults)
+        #expect(AppSettings.lastUsername(defaults) == "on@proton.me")
+        AppSettings.recordSignOut(in: defaults)              // kept while on
+        #expect(AppSettings.lastUsername(defaults) == "on@proton.me")
+
+        AppSettings.setKeepsSignedIn(false, in: defaults)
+        AppSettings.recordSignOut(in: defaults)              // cleared while off
+        #expect(AppSettings.lastUsername(defaults) == nil)
+
+        AppSettings.setLastUsername("stale@proton.me", in: defaults)
+        AppSettings.recordSignIn(username: "next@proton.me", in: defaults)
+        #expect(AppSettings.lastUsername(defaults) == nil)  // off: an old one goes too
+    }
+
+    // MARK: keep-signed-in gate (F8.5 review)
+
+    @Test func restoreGateDeletesItemWhenPreferenceIsOff() async throws {
+        let name = "nt.tests.restore.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name) ?? .standard
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = InMemoryKeychainStore()
+        let vault = SessionVault(store: store)
+        try await vault.save(RememberedSession(uid: "u", refreshToken: "r",
+                                               saltedKeyPass: Data([1]), username: "u"), sealed: true)
+
+        defaults.set(true, forKey: AppSettings.keepSignedInKey)
+        #expect(await SavedSignIn.mayRestore(vault: vault, defaults: defaults))
+        #expect(await vault.hasRememberedSession())
+
+        defaults.set(false, forKey: AppSettings.keepSignedInKey)
+        #expect(await SavedSignIn.mayRestore(vault: vault, defaults: defaults) == false)
+        #expect(await vault.hasRememberedSession() == false)
+        #expect(store.raw(SessionVault.kekAccount) == nil)
+        #expect(store.promptCount == 0)
+    }
+
+    @Test func setKeepSignedInWritesPreferenceAndDeletesWhenOff() async throws {
+        let name = "nt.tests.restore.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name) ?? .standard
+        defer { defaults.removePersistentDomain(forName: name) }
+        let vault = SessionVault(store: InMemoryKeychainStore())
+        let session = RememberedSession(uid: "u", refreshToken: "r", saltedKeyPass: Data([1]), username: "u")
+
+        await SavedSignIn.setKeepSignedIn(true, vault: vault, defaults: defaults)
+        #expect(AppSettings.keepsSignedIn(defaults))
+        try await vault.save(session)
+        await SavedSignIn.setKeepSignedIn(true, vault: vault, defaults: defaults)
+        #expect(await vault.hasRememberedSession())          // on never deletes
+
+        await SavedSignIn.setKeepSignedIn(false, vault: vault, defaults: defaults)
+        #expect(AppSettings.keepsSignedIn(defaults) == false)
+        #expect(await vault.hasRememberedSession() == false)
     }
 }
 

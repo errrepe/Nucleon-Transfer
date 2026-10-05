@@ -9,9 +9,10 @@
 // lives as zeroed-after-use Data inside AppSession.pendingPassword. The
 // field's own String storage cannot be wiped (Swift strings are immutable
 // values); it is dropped, not zeroed.
-// F8.5: "Keep me signed in" checkbox (default off, @AppStorage; turning it
-// off deletes any remembered session), the username prefilled from the
-// last successful sign-in, and a Try Again button when a remembered
+// F8.5: "Keep me signed in" checkbox (default off; read via @AppStorage,
+// written through AppSession.setKeepSignedIn, which deletes any remembered
+// session when it goes off), the username prefilled from the last
+// successful sign-in with it on, and a Try Again button when a remembered
 // session couldn't be restored for lack of network.
 // F8.5-V3: a "Use Touch ID" button when the Touch ID prompt for a sealed
 // remembered session was cancelled (or unavailable) — the session is kept.
@@ -85,7 +86,7 @@ struct LoginView: View {
                 .disabled(isSigningIn)
                 .onSubmit(signIn)
                 .accessibilityLabel("Password")
-                Toggle("Keep me signed in", isOn: $keepSignedIn)
+                Toggle("Keep me signed in", isOn: keepSignedInBinding)
                     .toggleStyle(.checkbox)
                     .disabled(isSigningIn)
                     .help("Stay signed in on this Mac after you quit. Your password is never stored.")
@@ -175,15 +176,20 @@ struct LoginView: View {
             announce(error)
             if error != nil, !isSigningIn { focus = .password }
         }
-        .onChange(of: keepSignedIn) { _, keep in
-            // Off = nothing may stay in the Keychain (F8.5).
-            if !keep { Task { await session.forgetRememberedSession() } }
-        }
         .onChange(of: isSigningIn) { _, signingIn in
             // The fields were disabled during SRP; after a failure the
             // (already cleared) password field gets focus back.
             if !signingIn, session.loginError != nil { focus = .password }
         }
+    }
+
+    /// The checkbox writes through AppSession (one path with Settings):
+    /// off = nothing may stay in the Keychain (F8.5).
+    private var keepSignedInBinding: Binding<Bool> {
+        Binding(
+            get: { keepSignedIn },
+            set: { keep in Task { await session.setKeepSignedIn(keep) } }
+        )
     }
 
     /// Captures the credentials and hands them to AppSession; the field

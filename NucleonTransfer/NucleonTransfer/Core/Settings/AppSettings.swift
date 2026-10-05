@@ -53,7 +53,9 @@ enum AppSettings {
     static let defaultKeepSignedIn = false
 
     /// Last username that signed in successfully — prefills the login
-    /// field. Not a secret; kept whatever "Keep me signed in" says.
+    /// field. Not a secret, but only kept with "Keep me signed in" (F8.5
+    /// review): stored at a sign-in with it on, cleared at a sign-in with
+    /// it off and at a sign-out while it is off, and by "Forget This Mac".
     static let lastUsernameKey = "lastUsername"
 
     /// "Require Touch ID" (Settings › Account, default OFF; F8.5-V3). On =
@@ -80,6 +82,28 @@ enum AppSettings {
     /// "Forget This Mac": the login field starts empty again.
     static func clearLastUsername(in defaults: UserDefaults) {
         defaults.removeObject(forKey: lastUsernameKey)
+    }
+
+    /// Writes the "Keep me signed in" preference (the only writer: both
+    /// toggles go through AppSession.setKeepSignedIn).
+    static func setKeepsSignedIn(_ keep: Bool, in defaults: UserDefaults) {
+        defaults.set(keep, forKey: keepSignedInKey)
+    }
+
+    /// A sign-in completed: remember `name` for the login field only when
+    /// "Keep me signed in" is on; otherwise forget any earlier one.
+    static func recordSignIn(username name: String, in defaults: UserDefaults) {
+        if keepsSignedIn(defaults) {
+            setLastUsername(name, in: defaults)
+        } else {
+            clearLastUsername(in: defaults)
+        }
+    }
+
+    /// A sign-out: the remembered username stays only while "Keep me
+    /// signed in" is on.
+    static func recordSignOut(in defaults: UserDefaults) {
+        if !keepsSignedIn(defaults) { clearLastUsername(in: defaults) }
     }
 
     static func setLastUsername(_ name: String, in defaults: UserDefaults) {

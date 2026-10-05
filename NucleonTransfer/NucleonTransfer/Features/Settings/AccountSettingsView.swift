@@ -1,8 +1,9 @@
 // Nucleon Transfer — Settings › Account (F8.5-V3).
-// "Keep me signed in" (same key as the login checkbox; off deletes the
-// remembered session), "Require Touch ID" (re-seals / unseals the stored
-// session through AppSession — a failure, e.g. a cancelled prompt when
-// turning it off, flips the toggle back), and "Forget This Mac…" behind a
+// "Keep me signed in" (same key and same AppSession.setKeepSignedIn path
+// as the login checkbox; off deletes the remembered session), "Require
+// Touch ID" (re-seals / unseals the stored session through AppSession —
+// a failure, e.g. a cancelled prompt when turning it off, flips the
+// toggle back), and "Forget This Mac…" behind a
 // confirmation: both Keychain items + the remembered username go, the
 // current session keeps running. The Touch ID toggle is disabled (with
 // the reason) while keep-signed-in is off or this Mac can't use Touch ID.
@@ -36,7 +37,7 @@ struct AccountSettingsView: View {
     var body: some View {
         Form {
             Section("Sign-In") {
-                Toggle("Keep me signed in", isOn: $keepSignedIn)
+                Toggle("Keep me signed in", isOn: keepSignedInBinding)
                     .disabled(isBusy)
                 Text("Stay signed in on this Mac after you quit. Takes effect at your next sign-in. Your password is never stored.")
                     .font(.caption)
@@ -64,10 +65,6 @@ struct AccountSettingsView: View {
             }
         }
         .settingsFormLayout()
-        .onChange(of: keepSignedIn) { _, keep in
-            // Off = nothing may stay in the Keychain (same as the login checkbox).
-            if !keep { Task { await session.forgetRememberedSession() } }
-        }
         .confirmationDialog(
             "Forget this Mac?",
             isPresented: $confirmingForget
@@ -81,6 +78,15 @@ struct AccountSettingsView: View {
         } message: {
             Text("The saved sign-in and the remembered username are removed from this Mac. You stay signed in until you sign out or quit.")
         }
+    }
+
+    /// Read via @AppStorage, written only through AppSession (which also
+    /// deletes the remembered session when it goes off).
+    private var keepSignedInBinding: Binding<Bool> {
+        Binding(
+            get: { keepSignedIn },
+            set: { keep in Task { await session.setKeepSignedIn(keep) } }
+        )
     }
 
     /// Writes the preference only once the vault followed it; a failed

@@ -1,7 +1,8 @@
 // Nucleon Transfer — session orchestrator. Tokens live in memory here; the
 // opt-in "Keep me signed in" (F8.5) persists only the refresh token via
-// AppSession + SessionVault, fed by `tokenObserver` — this actor never
-// touches the Keychain or disk itself.
+// AppSession + SessionVault, fed by the `tokenChanges` stream — this actor
+// never touches the Keychain or disk itself, and never waits for whoever
+// does (F8.5 review: a refresh returns as soon as its tokens are in).
 // Flow: info -> hashPassword(v4, bcrypt) -> SRP proofs -> /auth/v4
 //       -> verify serverProof -> optional 2FA.
 // 401 anywhere -> one shared (single-flight) /auth/v4/refresh, then retry
@@ -51,17 +52,27 @@ actor SessionManager {
     /// tokens, so a second concurrent refresh with the same token would fail
     /// and token reuse can revoke the whole session.
     private var refreshTask: Task<ProtonSession, Error>?
-    /// F8.5: told about every token change — the new tokens after login /
+    /// F8.5: every token change, in order — the new tokens after login /
     /// adopt / each successful refresh, nil when the session ends (signOut,
-    /// discard, failed restore). Awaited in order on this actor, so a
-    /// rotation is recorded before the refresh's joiners resume.
-    private var tokenObserver: (@Sendable (SessionTokens?) async -> Void)?
+    /// discard, failed restore). Yielded synchronously on this actor, so
+    /// the order is exactly the order of the changes; the network path
+    /// never awaits the consumer (AppSession, one long-lived Task that
+    /// writes rotations to the Keychain). Single consumer; unbounded, so
+    /// nothing is dropped (events before the consumer starts are kept).
+    nonisolated let tokenChanges: AsyncStream<SessionTokens?>
+    private let tokenContinuation: AsyncStream<SessionTokens?>.Continuation
 
     init(api: APIClient = APIClient(), bcrypt: any BcryptHasher = ProtonBcryptHasher(),
          authAPI: (any SessionAuthAPI)? = nil) {
         self.api = api
         self.authAPI = authAPI ?? api
         self.bcrypt = bcrypt
+        (tokenChanges, tokenContinuation) = AsyncStream.makeStream(of: SessionTokens?.self,
+                                                                   bufferingPolicy: .unbounded)
+    }
+
+    deinit {
+        tokenContinuation.finish()
     }
 
     var isSignedIn: Bool { session != nil }
@@ -74,11 +85,6 @@ actor SessionManager {
     /// remembered session stores.
     func currentTokens() -> SessionTokens? {
         session.map { SessionTokens(uid: $0.uid, refreshToken: $0.refreshToken) }
-    }
-
-    /// Installs (or clears) the token observer. See `tokenObserver`.
-    func setTokenObserver(_ observer: (@Sendable (SessionTokens?) async -> Void)?) {
-        tokenObserver = observer
     }
 
     /// Runs `op` with (uid, accessToken), refreshing once on 401 and retrying
@@ -108,13 +114,13 @@ actor SessionManager {
     /// path builds on it). Counts as a session replacement.
     func adopt(_ next: ProtonSession) async {
         replaceSession(with: next)
-        await notifyTokens()
+        notifyTokens()
     }
 
     /// Resumes a remembered session (F8.5) from its UID + refresh token:
     /// installs it with no access token and runs the normal single-flight
     /// refresh (`POST /auth/v4/refresh`, same body as a 401 refresh minus
-    /// the absent access token) — the observer then sees the rotated
+    /// the absent access token) — `tokenChanges` then carries the rotated
     /// tokens. On failure the half-session is cleared locally (nothing to
     /// revoke: it never had an access token) and the error is rethrown
     /// for the caller to classify (RestoreFailure).
@@ -126,7 +132,7 @@ actor SessionManager {
         } catch {
             if epoch == started {
                 replaceSession(with: nil)
-                await notifyTokens()
+                notifyTokens()
             }
             throw error
         }
@@ -183,7 +189,7 @@ actor SessionManager {
         }
         replaceSession(with: ProtonSession(uid: res.auth.uid, accessToken: res.auth.accessToken,
                                            refreshToken: res.auth.refreshToken))
-        await notifyTokens()
+        notifyTokens()
         if res.auth.requires2FA { throw ProtonAPIError.needs2FA }
     }
 
@@ -200,7 +206,7 @@ actor SessionManager {
     func signOut() async {
         let s = session
         replaceSession(with: nil)
-        await notifyTokens()
+        notifyTokens()
         if let s {
             try? await authAPI.authDelete(uid: s.uid, accessToken: s.accessToken)
         }
@@ -211,7 +217,7 @@ actor SessionManager {
     /// token for a retry, so the server session must stay alive.
     func discard() async {
         replaceSession(with: nil)
-        await notifyTokens()
+        notifyTokens()
     }
 
     /// Refreshes the tokens (POST /auth/v4/refresh). Single-flight: callers
@@ -266,14 +272,14 @@ actor SessionManager {
         let next = ProtonSession(uid: auth.uid.isEmpty ? s.uid : auth.uid,
                                  accessToken: auth.accessToken, refreshToken: auth.refreshToken)
         session = next
-        await notifyTokens()
+        notifyTokens()
         return next
     }
 
-    /// Reports the current tokens (nil when signed out) to the observer.
-    private func notifyTokens() async {
-        guard let tokenObserver else { return }
-        await tokenObserver(currentTokens())
+    /// Publishes the current tokens (nil when signed out) on
+    /// `tokenChanges`. Synchronous: never suspends the caller.
+    private func notifyTokens() {
+        tokenContinuation.yield(currentTokens())
     }
 
     /// Every session replacement goes through here: bumps the epoch and

@@ -16,6 +16,11 @@
 // prompt — cancel keeps the items and offers "Use Touch ID", changed
 // fingerprints delete them. Settings re-seals/unseals the live item and
 // "Forget This Mac" drops both items + the remembered username.
+// F8.5 review: launch restore runs once per app launch and only while
+// "Keep me signed in" is on (else the item is deleted); both toggles go
+// through `setKeepSignedIn`; token rotations arrive on
+// `SessionManager.tokenChanges`, consumed in order by one Task; the last
+// username is persisted only with "Keep me signed in".
 import Foundation
 
 @MainActor
@@ -76,9 +81,12 @@ final class AppSession {
     /// before any await, so a late rotation can't rewrite a deleted item
     /// (`updateTokens` never creates one either).
     private var remembersSession = false
-    /// The SessionManager token observer is installed lazily (it needs
-    /// `self`, which init can't hand out); first sign-in/restore does it.
-    private var observesTokens = false
+    /// Consumes `sessions.tokenChanges` for the app's lifetime, one event
+    /// at a time and in order (see `tokensChanged`).
+    private var tokenConsumer: Task<Void, Never>?
+    /// The launch restore already ran (or is running) — reopening the
+    /// window must not start another one (F8.5 review).
+    private var didAttemptLaunchRestore = false
 
     /// Unlocked address keys (share-passphrase chain root). Memory only.
     private(set) var addressKeys: [KeyringCache.UnlockedKey] = []
@@ -130,6 +138,11 @@ final class AppSession {
         // B12: nothing in the shared snapshot is visible or runnable until
         // an account signs in (finishSignIn scopes the queue to it).
         queue = TransferQueue(storeURL: queueStoreURL, accountScope: .signedOut)
+        tokenConsumer = Task { [weak self, changes = sessions.tokenChanges] in
+            for await tokens in changes {
+                await self?.tokensChanged(tokens)
+            }
+        }
     }
 
     // MARK: - sign-in
@@ -146,7 +159,6 @@ final class AppSession {
         canRetryRestore = false
         canRetryTouchID = false
         loginUsername = username
-        await installTokenObserver()
         clearPendingPassword() // re-entry: never overwrite live bytes unzeroed
         pendingPassword = Data(password.utf8)
         do {
@@ -226,7 +238,8 @@ final class AppSession {
             return
         }
         clearPendingPassword()
-        if let loginUsername { AppSettings.setLastUsername(loginUsername, in: defaults) }
+        // Prefill only for users who opted in (F8.5 review).
+        if let loginUsername { AppSettings.recordSignIn(username: loginUsername, in: defaults) }
         await refreshAccount()
         phase = .signedIn
         await loadRoots()
@@ -234,7 +247,16 @@ final class AppSession {
 
     // MARK: - keep me signed in (F8.5)
 
-    /// Launch path (RootView.task) and the login screen's Retry: resumes
+    /// Launch path: the first call per app launch runs the restore; later
+    /// ones (the window reopened, a second scene) do nothing. The flag is
+    /// set before any suspension, so two racing callers can't both pass.
+    func restoreOnLaunch() async {
+        guard !didAttemptLaunchRestore else { return }
+        didAttemptLaunchRestore = true
+        await restoreRememberedSession()
+    }
+
+    /// `restoreOnLaunch` and the login screen's Retry: resumes
     /// the remembered session, if any — refresh from the stored token, then
     /// the shared `finishUnlock` with the stored salted key password.
     /// Failure policy (RestoreFailure): a plain network failure KEEPS the
@@ -244,14 +266,18 @@ final class AppSession {
     /// V3: a sealed item first needs the Touch ID KEK (`vault.unlock`) —
     /// cancel / unavailable keeps it and offers "Use Touch ID"; changed
     /// fingerprints delete it. No network call happens before that.
+    /// With "Keep me signed in" off nothing is resumed: any item is
+    /// deleted instead (F8.5 review).
     func restoreRememberedSession() async {
         guard phase == .signedOut else { return }
-        guard await vault.hasRememberedSession() else {
+        guard await SavedSignIn.mayRestore(vault: vault, defaults: defaults),
+              await vault.hasRememberedSession()
+        else {
             canRetryRestore = false
             canRetryTouchID = false
             return
         }
-        await installTokenObserver()
+        guard phase == .signedOut else { return }
         phase = .restoring
         loginError = nil
         twoFactorError = nil
@@ -295,13 +321,17 @@ final class AppSession {
         await loadRoots()
     }
 
-    /// Deletes the remembered session (login screen: "Keep me signed in"
-    /// turned off). Never touches the live session.
-    func forgetRememberedSession() async {
-        remembersSession = false
-        canRetryRestore = false
-        canRetryTouchID = false
-        await vault.delete()
+    /// "Keep me signed in" switched — the single path for the login
+    /// checkbox and Settings › Account (F8.5 review): writes the
+    /// preference now (the @AppStorage toggles follow it) and, when off,
+    /// deletes the remembered session. Never touches the live session.
+    func setKeepSignedIn(_ keep: Bool) async {
+        if !keep {
+            remembersSession = false
+            canRetryRestore = false
+            canRetryTouchID = false
+        }
+        await SavedSignIn.setKeepSignedIn(keep, vault: vault, defaults: defaults)
     }
 
     /// Settings › "Forget This Mac": deletes the remembered session (both
@@ -383,24 +413,20 @@ final class AppSession {
         }
     }
 
-    /// Installs the SessionManager token observer once (see
-    /// `tokensChanged`).
-    private func installTokenObserver() async {
-        guard !observesTokens else { return }
-        observesTokens = true
-        await sessions.setTokenObserver { [weak self] tokens in
-            await self?.tokensChanged(tokens)
-        }
-    }
-
     /// Token rotation → Keychain, only while the item belongs to the live
     /// session. nil (session ended) is deliberately ignored: sign-out
     /// deletes the item itself, first, and a network-failed restore keeps
-    /// it on purpose. A failed write leaves the old (spent) token behind;
-    /// the next restore then fails as an auth error and deletes the item.
+    /// it on purpose. Events arrive after the fact (the refresh doesn't
+    /// wait for us), so the event only says "something changed": what is
+    /// written is the CURRENT token — a stale event processed after
+    /// `rememberSessionIfEnabled` saved a newer token can never roll the
+    /// item back to a spent one. A failed write leaves the old (spent)
+    /// token behind; the next restore then fails as an auth error and
+    /// deletes the item.
     private func tokensChanged(_ tokens: SessionTokens?) async {
-        guard let tokens, remembersSession else { return }
-        _ = try? await vault.updateTokens(uid: tokens.uid, refreshToken: tokens.refreshToken)
+        guard tokens != nil, remembersSession else { return }
+        guard let latest = await sessions.currentTokens(), remembersSession else { return }
+        _ = try? await vault.updateTokens(uid: latest.uid, refreshToken: latest.refreshToken)
     }
 
     /// Full `signOut` cleanup for a sign-in that got past SRP and then
@@ -422,7 +448,10 @@ final class AppSession {
     /// reset UI-visible state. `reason` lands on the login screen. Every
     /// sign-out forgets the remembered session, including the unrecoverable
     /// 401 one (BrowserModel) and a failed sign-in/2FA (`abortSignIn`).
+    /// The remembered username survives only while "Keep me signed in"
+    /// is on (F8.5 review).
     func signOut(reason: String? = nil) async {
+        AppSettings.recordSignOut(in: defaults)
         await tearDown(reason: reason, keepRemembered: false)
     }
 

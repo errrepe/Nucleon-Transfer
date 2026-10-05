@@ -55,9 +55,19 @@ key seeds. `RememberedSession.description` is redacted.
   tag)` of the JSON, with the marker as associated data. The marker lets
   the vault tell sealed from plain (`{`) blobs; anything else is deleted.
 - Only the launch restore (and turning Touch ID off without the key in
-  memory) reads the KEK item, through an `LAContext` with a localized
-  reason ("Nucleon Transfer is trying to unlock your saved sign-in").
-  Every other read uses `interactionNotAllowed` and can never show UI.
+  memory) reads the KEK item, in two steps: `LAContext.evaluatePolicy`
+  (async, off the vault actor — the prompt never blocks a thread) with a
+  localized reason ("Nucleon Transfer is trying to unlock your saved
+  sign-in") and no password fallback button, then a non-interactive
+  `SecItemCopyMatching` with that authenticated context. Classification
+  (`BiometricRead.classify`): evaluation cancelled → cancelled; no finger
+  enrolled → invalidated; other evaluation failure / lockout →
+  unavailable; evaluation succeeded but the read answers
+  `errSecItemNotFound` or `errSecAuthFailed` → invalidated (the item's
+  enrolled-finger snapshot is gone — never an endless "try again").
+  Concurrent unlocks share one prompt; a KEK that arrives after the items
+  changed is discarded. Every other read uses `interactionNotAllowed` and
+  can never show UI.
 - The KEK stays in the `SessionVault` actor for the session, so each
   refresh-token rotation re-seals the blob without prompting again. It is
   dropped on sign-out and when a restore fails; CryptoKit releases (and
@@ -88,15 +98,26 @@ and a successful password login always rewrites (or removes) both items.
 1. Password login (incl. 2FA) → key unlock → if "Keep me signed in" is on,
    the blob is saved (sealed when Touch ID is required); otherwise any
    item is deleted.
-2. Launch → `.restoring`: Touch ID (sealed only) → `restore(uid:refreshToken:)`
+2. Launch (once per app launch, and only while "Keep me signed in" is on —
+   otherwise any leftover item is deleted) → `.restoring`: Touch ID
+   (sealed only) → `restore(uid:refreshToken:)`
    (refresh **without** an access token) → the same `finishUnlock` as a
    password login with the stored salted key password.
 3. Every token rotation is written through to the item, but only while it
-   belongs to the live session; a refresh never creates an item.
-4. **Sign-out deletes both items first** — before any network call and
+   belongs to the live session; a refresh never creates an item. Changes
+   travel on `SessionManager.tokenChanges` (an ordered AsyncStream yielded
+   on the actor); one AppSession task writes the *current* token for each
+   event, so the refresh never waits for Keychain I/O and a late event
+   can't roll the item back.
+4. The last username (login prefill, UserDefaults) is kept only with
+   "Keep me signed in": saved at a sign-in with it on, cleared at a
+   sign-in or sign-out with it off. Both "Keep me signed in" toggles
+   (login checkbox, Settings) go through one `AppSession.setKeepSignedIn`,
+   which deletes the items when it is switched off.
+5. **Sign-out deletes both items first** — before any network call and
    before keys are dropped — then cancels transfers, revokes the session
    server-side (best-effort), wipes key material.
-5. Settings › "Forget This Mac" deletes both items and the remembered
+6. Settings › "Forget This Mac" deletes both items and the remembered
    username without ending the current session.
 
 ## Alternatives rejected

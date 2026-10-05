@@ -8,6 +8,12 @@
 // prompt (`authenticatedData`). LocalAuthentication is imported here — a
 // non-UI system framework, like Security — because the live read needs an
 // LAContext; everything above the live calls is a pure, tested builder.
+// F8.5 review: that read is async and two-step — `LAContext.evaluatePolicy`
+// first (awaited off the caller's actor, so the prompt never blocks a
+// thread), then a non-interactive SecItemCopyMatching with the
+// authenticated context. `BiometricRead.classify` maps the pair of
+// outcomes; errSecAuthFailed AFTER a successful evaluation means the item
+// itself is void (fingerprints changed), so it can't loop as "retry".
 import Foundation
 import LocalAuthentication
 import Security
@@ -37,15 +43,76 @@ enum BiometricUnlockFailure: Error, Sendable, Equatable {
     case invalidated
 }
 
+/// What `LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics)`
+/// answered, before any Keychain read (F8.5 review).
+enum BiometricPolicyOutcome: Sendable, Equatable {
+    /// A currently enrolled finger matched.
+    case succeeded
+    /// The prompt was dismissed (user, app or system cancel, or the
+    /// fallback button).
+    case cancelled
+    /// No fingerprint is enrolled any more: every `.biometryCurrentSet`
+    /// item is already void.
+    case notEnrolled
+    /// No match, lockout, no sensor reachable, no UI possible, or any
+    /// other evaluation error — "not now".
+    case failed
+
+    static func from(_ code: LAError.Code) -> BiometricPolicyOutcome {
+        switch code {
+        case .userCancel, .appCancel, .systemCancel, .userFallback: return .cancelled
+        case .biometryNotEnrolled: return .notEnrolled
+        default: return .failed
+        }
+    }
+
+    /// An evaluatePolicy error (an LAError, or anything else = `.failed`).
+    static func from(error: any Error) -> BiometricPolicyOutcome {
+        guard let la = error as? LAError else { return .failed }
+        return from(la.code)
+    }
+}
+
+/// Classification of the two-step Touch ID read (pure, unit-tested).
+enum BiometricRead {
+    /// nil = success (the KEK bytes are usable). `readStatus` is the
+    /// SecItemCopyMatching status of the non-interactive read made with
+    /// the authenticated context; it only matters when the policy
+    /// evaluation succeeded (otherwise no read happens).
+    /// - evaluation cancelled → `.cancelled` (keep, offer retry);
+    /// - no finger enrolled → `.invalidated`;
+    /// - other evaluation failure / lockout → `.unavailable` (keep);
+    /// - evaluation succeeded, then errSecItemNotFound or errSecAuthFailed
+    ///   → `.invalidated`: the finger matched but the item refuses it —
+    ///   its `.biometryCurrentSet` snapshot no longer exists;
+    /// - evaluation succeeded, then errSecUserCanceled → `.cancelled`;
+    ///   any other read error → `.unavailable`.
+    static func classify(policy: BiometricPolicyOutcome, readStatus: OSStatus) -> BiometricUnlockFailure? {
+        switch policy {
+        case .cancelled: return .cancelled
+        case .notEnrolled: return .invalidated
+        case .failed: return .unavailable
+        case .succeeded:
+            switch readStatus {
+            case errSecSuccess: return nil
+            case errSecItemNotFound, errSecAuthFailed: return .invalidated
+            case errSecUserCanceled: return .cancelled
+            default: return .unavailable
+            }
+        }
+    }
+}
+
 /// Get/set/delete opaque `Data` by account key under one service.
 protocol KeychainStore: Sendable {
     /// The stored bytes, or nil when no item exists. Never shows UI: a
     /// Touch ID protected item fails (see `authenticatedData`).
     func data(for account: String) throws -> Data?
-    /// Reads a `.biometryCurrentSet` item, showing the Touch ID prompt
-    /// with `reason`. nil = no such item (invalidated or never written).
-    /// Blocks until the user answers.
-    func authenticatedData(for account: String, reason: String) throws -> Data?
+    /// Reads a `.biometryCurrentSet` item behind the Touch ID prompt
+    /// (`reason`): evaluates the policy first — suspending, never blocking
+    /// a thread — then reads without UI using that authentication.
+    /// Failures are already classified (`BiometricRead.classify`).
+    func authenticatedData(for account: String, reason: String) async -> Result<Data, BiometricUnlockFailure>
     /// Update-or-add semantics.
     func set(_ data: Data, for account: String, protection: KeychainProtection) throws
     /// Removes the item; a missing item is not an error.
@@ -56,21 +123,6 @@ protocol KeychainStore: Sendable {
 struct KeychainStoreError: Error, Sendable, Equatable, CustomStringConvertible {
     var status: OSStatus
     var description: String { "Keychain error \(status)" }
-
-    /// Touch ID classification of a failed protected read. nil = not a
-    /// biometric outcome (a plain Keychain error).
-    /// - errSecUserCanceled: the prompt was dismissed;
-    /// - errSecAuthFailed / errSecInteractionNotAllowed: no match, locked
-    ///   out, or no UI possible — retryable;
-    /// - errSecItemNotFound: the item is gone (fingerprints changed).
-    var biometricFailure: BiometricUnlockFailure? {
-        switch status {
-        case errSecUserCanceled: return .cancelled
-        case errSecAuthFailed, errSecInteractionNotAllowed: return .unavailable
-        case errSecItemNotFound: return .invalidated
-        default: return nil
-        }
-    }
 }
 
 /// Whether this Mac can use Touch ID now (Settings toggle, sign-in save).
@@ -238,22 +290,8 @@ struct LiveKeychainStore: KeychainStore {
         return try copyData(Self.readQuery(service: service, account: account, context: context))
     }
 
-    func authenticatedData(for account: String, reason: String) throws -> Data? {
-        let context = LAContext()
-        var availability: NSError?
-        if !context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &availability) {
-            // No enrolled finger left: every .biometryCurrentSet item is
-            // already invalid. Anything else (no sensor reachable, lockout)
-            // is "not now".
-            if availability?.domain == LAErrorDomain,
-               availability?.code == LAError.Code.biometryNotEnrolled.rawValue
-            {
-                return nil
-            }
-            throw KeychainStoreError(status: errSecInteractionNotAllowed)
-        }
-        context.localizedReason = reason
-        return try copyData(Self.readQuery(service: service, account: account, context: context))
+    func authenticatedData(for account: String, reason: String) async -> Result<Data, BiometricUnlockFailure> {
+        await Self.authenticatedRead(service: service, account: account, reason: reason)
     }
 
     func set(_ data: Data, for account: String, protection: KeychainProtection) throws {
@@ -306,6 +344,40 @@ struct LiveKeychainStore: KeychainStore {
 
     // MARK: internals
 
+    /// The two-step Touch ID read, `@concurrent` so neither the prompt nor
+    /// the Keychain call runs on the caller's actor (SessionVault). The
+    /// LAContext is created, evaluated and used here only — one task,
+    /// strictly in sequence — so it never crosses an isolation boundary.
+    @concurrent
+    private static func authenticatedRead(service: String, account: String,
+                                          reason: String) async -> Result<Data, BiometricUnlockFailure> {
+        let context = LAContext()
+        // No "Use Password…" button: Touch ID or nothing (ADR-004).
+        context.localizedFallbackTitle = ""
+        let policy: BiometricPolicyOutcome
+        do {
+            let ok = try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
+                                                      localizedReason: reason)
+            policy = ok ? .succeeded : .failed
+        } catch {
+            policy = .from(error: error)
+        }
+        guard policy == .succeeded else {
+            return .failure(BiometricRead.classify(policy: policy, readStatus: errSecSuccess) ?? .unavailable)
+        }
+        // Reuse the evaluated authentication; never a second prompt.
+        context.interactionNotAllowed = true
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(
+            readQuery(service: service, account: account, context: context) as CFDictionary, &result
+        )
+        if let failure = BiometricRead.classify(policy: .succeeded, readStatus: status) {
+            return .failure(failure)
+        }
+        guard let data = result as? Data else { return .failure(.invalidated) }
+        return .success(data)
+    }
+
     private func copyData(_ query: [String: Any]) throws -> Data? {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -335,10 +407,13 @@ struct LiveKeychainStore: KeychainStore {
 /// next call of that kind throw, to exercise SessionVault's error paths.
 /// `.biometryCurrentSet` items behave like the real ones: `data(for:)`
 /// refuses them, `authenticatedData` answers per `biometry` (success,
-/// user cancelled, unavailable, or "fingerprints changed" — which drops
-/// the item, as the system does).
+/// user cancelled, unavailable, or "fingerprints changed" — the finger
+/// matches but the item answers errSecAuthFailed and is dropped, as the
+/// system does) through the same `BiometricRead.classify` as the live
+/// store. A failing `.biometricRead` is a matched finger + errSecIO.
 final class InMemoryKeychainStore: KeychainStore {
-    enum Operation: Sendable { case read, write, delete }
+    /// `biometricRead` = the Touch ID read only (`authenticatedData`).
+    enum Operation: Sendable { case read, write, delete, biometricRead }
 
     /// What the next Touch ID prompts do.
     enum Biometry: Sendable { case succeed, cancel, unavailable, enrollmentChanged }
@@ -379,25 +454,32 @@ final class InMemoryKeychainStore: KeychainStore {
         }
     }
 
-    func authenticatedData(for account: String, reason: String) throws -> Data? {
-        try check(.read)
-        return try state.withLock { s in
+    func authenticatedData(for account: String, reason: String) async -> Result<Data, BiometricUnlockFailure> {
+        let failRead = state.withLock { $0.failing.remove(.biometricRead) != nil }
+        let (policy, status, data): (BiometricPolicyOutcome, OSStatus, Data?) = state.withLock { s in
             s.prompts += 1
             switch s.biometry {
             case .succeed:
-                return s.items[account]
+                if failRead { return (.succeeded, errSecIO, nil) }
+                guard let item = s.items[account] else { return (.succeeded, errSecItemNotFound, nil) }
+                return (.succeeded, errSecSuccess, item)
             case .cancel:
-                throw KeychainStoreError(status: errSecUserCanceled)
+                return (.cancelled, errSecSuccess, nil)
             case .unavailable:
-                throw KeychainStoreError(status: errSecInteractionNotAllowed)
+                return (.failed, errSecSuccess, nil)
             case .enrollmentChanged:
                 if s.protections[account] == .biometryCurrentSet {
                     s.items[account] = nil
                     s.protections[account] = nil
                 }
-                return nil
+                return (.succeeded, errSecAuthFailed, nil)
             }
         }
+        if let failure = BiometricRead.classify(policy: policy, readStatus: status) {
+            return .failure(failure)
+        }
+        guard let data else { return .failure(.invalidated) }
+        return .success(data)
     }
 
     func set(_ data: Data, for account: String, protection: KeychainProtection) throws {

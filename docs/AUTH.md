@@ -146,10 +146,19 @@
   restore omite o campo `AccessToken` (a sessão restaurada ainda não tem
   um); o resto é idêntico ao refresh do 401. **Live check pendente:**
   confirmar contra a Proton que esse corpo é aceito.
-- **Rotação:** o observer de tokens do `SessionManager` grava cada refresh
-  token novo no item enquanto ele pertence à sessão viva (no modo Touch ID,
-  re-selado com a KEK em memória, sem novo prompt). Um refresh nunca cria
-  item.
+- **Rotação:** cada troca de tokens sai em ordem no
+  `SessionManager.tokenChanges` (AsyncStream, sem o refresh esperar o
+  Keychain); uma Task do `AppSession` grava o refresh token *atual* no item
+  enquanto ele pertence à sessão viva (no modo Touch ID, re-selado com a
+  KEK em memória, sem novo prompt). Um refresh nunca cria item.
+- **Touch ID em dois passos:** `LAContext.evaluatePolicy` (async, fora do
+  actor do vault) e depois leitura sem UI com o contexto autenticado;
+  `errSecAuthFailed`/`errSecItemNotFound` após uma avaliação bem-sucedida =
+  digitais alteradas (itens apagados), nunca "tente de novo" em loop.
+- **Preferência desligada:** com "Keep me signed in" desligado o launch não
+  restaura nada e apaga qualquer item que tenha sobrado; o restore roda uma
+  vez por launch. O último username só é guardado com a opção ligada
+  (login/sign-out com ela desligada o apagam).
 - **Sign-out:** apaga os itens PRIMEIRO — antes de qualquer chamada de rede
   e antes de soltar as chaves — e descarta a KEK da memória; depois
   cancela transferências, revoga a sessão (`DELETE /auth/v4`,

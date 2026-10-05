@@ -14,6 +14,11 @@
 // Only `unlock(reason:)` reads the KEK (Touch ID prompt); the KEK then
 // stays in this actor for the session, so token rotations re-seal
 // silently. `lock()`/`delete()` drop it.
+// F8.5 review: the Touch ID read is async (KeychainStore evaluates the
+// policy off this actor, then reads without UI), so the actor is free
+// while the prompt is up. That makes `unlock` reentrant: concurrent KEK
+// reads share one prompt (`kekRead`), and a KEK that arrives after the
+// items changed (`revision`) is discarded instead of being cached.
 import CryptoKit
 import Foundation
 
@@ -80,6 +85,13 @@ actor SessionVault {
     /// The unsealed KEK, held for the session after a Touch ID unlock or a
     /// sealed save. CryptoKit zeroes SymmetricKey storage when released.
     private var kek: SymmetricKey?
+    /// The Touch ID read in flight — a second `unlock` joins it instead of
+    /// showing another prompt.
+    private var kekRead: Task<Result<SymmetricKey, BiometricUnlockFailure>, Never>?
+    /// Bumped by every write/delete of the items and by `lock()`: an
+    /// `unlock` that suspended on the prompt checks it before caching the
+    /// KEK or deleting anything.
+    private var revision: UInt64 = 0
 
     init(store: any KeychainStore, account: String = SessionVault.account,
          kekAccount: String = SessionVault.kekAccount)
@@ -118,8 +130,36 @@ actor SessionVault {
     /// cached KEK reads the KEK item — the Touch ID prompt, with `reason`.
     /// KEK gone (fingerprints changed) or a blob it can't open → both
     /// items deleted, `.failed(.invalidated)`. Cancel / not available now
-    /// → both kept.
-    func unlock(reason: String) -> Unlock {
+    /// → both kept. The prompt suspends (the actor stays usable); if the
+    /// items changed meanwhile the result is discarded and the new state
+    /// is read once more (a second change → `.unavailable`, kept).
+    func unlock(reason: String) async -> Unlock {
+        await unlock(reason: reason, attemptsLeft: 2)
+    }
+
+    private func unlock(reason: String, attemptsLeft: Int) async -> Unlock {
+        guard attemptsLeft > 0 else { return .failed(.unavailable) }
+        if let ready = openStored() { return ready }
+        // Sealed, no KEK in memory: Touch ID.
+        let started = revision
+        let result = await readKEK(reason: reason)
+        guard revision == started else {
+            return await unlock(reason: reason, attemptsLeft: attemptsLeft - 1)
+        }
+        switch result {
+        case let .success(key):
+            if kek == nil { kek = key }
+        case let .failure(failure):
+            if failure == .invalidated { delete() }
+            return .failed(failure)
+        }
+        return openStored() ?? .failed(.invalidated)
+    }
+
+    /// The stored blob without Touch ID: `.absent`, a decoded session, or
+    /// `.failed(.invalidated)` (deleted) for a sealed blob the cached KEK
+    /// can't open. nil = sealed and no KEK cached (the prompt is needed).
+    private func openStored() -> Unlock? {
         guard var raw = try? store.data(for: account) else { return .absent }
         defer { SecureBytes.wipe(&raw) }
         switch SessionBlobFormat.detect(raw) {
@@ -131,16 +171,8 @@ actor SessionVault {
         case .sealed:
             break
         }
-        if kek == nil {
-            switch readKEK(reason: reason) {
-            case let .success(key):
-                kek = key
-            case let .failure(failure):
-                if failure == .invalidated { delete() }
-                return .failed(failure)
-            }
-        }
-        guard let kek, var plain = try? SessionSeal.open(raw, key: kek) else {
+        guard let kek else { return nil }
+        guard var plain = try? SessionSeal.open(raw, key: kek) else {
             delete()
             return .failed(.invalidated)
         }
@@ -168,6 +200,7 @@ actor SessionVault {
     /// cached key are dropped. Throws the store's error
     /// (KeychainStoreError — a status code only).
     func save(_ session: RememberedSession, sealed: Bool = false) throws {
+        revision &+= 1
         var raw = try Self.encoder.encode(session)
         defer { SecureBytes.wipe(&raw) }
         guard sealed else {
@@ -211,7 +244,7 @@ actor SessionVault {
     /// ID prompt with `reason`). Nothing remembered → only the KEK state
     /// follows. Returns false when the change couldn't be applied (the
     /// caller reverts the toggle); the stored session is left as it was.
-    func setSealed(_ sealed: Bool, reason: String) -> Bool {
+    func setSealed(_ sealed: Bool, reason: String) async -> Bool {
         guard let format = storedFormat() else {
             if !sealed { dropKEK() }
             return true
@@ -235,7 +268,8 @@ actor SessionVault {
                 return false
             }
         case (.sealed, false):
-            switch unlock(reason: reason) {
+            // No suspension between `unlock` returning and the save below.
+            switch await unlock(reason: reason) {
             case var .session(session):
                 defer { session.wipe() }
                 return (try? save(session, sealed: false)) != nil
@@ -254,12 +288,14 @@ actor SessionVault {
     /// Forgets the cached KEK (the session ended but the items stay — a
     /// network-failed restore). The next `unlock` prompts again.
     func lock() {
+        revision &+= 1
         kek = nil
     }
 
     /// Removes both items and the cached KEK. Never throws: callers are
     /// signing out or recovering, and a store failure must not block that.
     func delete() {
+        revision &+= 1
         try? store.delete(account: account)
         dropKEK()
     }
@@ -271,22 +307,27 @@ actor SessionVault {
         try? store.delete(account: kekAccount)
     }
 
-    /// The KEK via Touch ID. A missing item or a wrong-size value is
-    /// `.invalidated`; an unclassified Keychain error is `.unavailable`
-    /// (kept — the password login replaces both items anyway).
-    private func readKEK(reason: String) -> Result<SymmetricKey, BiometricUnlockFailure> {
-        do {
-            guard var bytes = try store.authenticatedData(for: kekAccount, reason: reason) else {
-                return .failure(.invalidated)
+    /// The KEK via Touch ID (store-classified failures; a wrong-size value
+    /// is `.invalidated`). Single-flight: callers arriving while the
+    /// prompt is up await the same read.
+    private func readKEK(reason: String) async -> Result<SymmetricKey, BiometricUnlockFailure> {
+        if let kekRead { return await kekRead.value }
+        let store = store
+        let kekAccount = kekAccount
+        let task = Task { () -> Result<SymmetricKey, BiometricUnlockFailure> in
+            switch await store.authenticatedData(for: kekAccount, reason: reason) {
+            case var .success(bytes):
+                defer { SecureBytes.wipe(&bytes) }
+                guard bytes.count == SessionSeal.keyByteCount else { return .failure(.invalidated) }
+                return .success(SymmetricKey(data: bytes))
+            case let .failure(failure):
+                return .failure(failure)
             }
-            defer { SecureBytes.wipe(&bytes) }
-            guard bytes.count == SessionSeal.keyByteCount else { return .failure(.invalidated) }
-            return .success(SymmetricKey(data: bytes))
-        } catch let error as KeychainStoreError {
-            return .failure(error.biometricFailure ?? .unavailable)
-        } catch {
-            return .failure(.unavailable)
         }
+        kekRead = task
+        let result = await task.value
+        kekRead = nil
+        return result
     }
 
     /// Decodes a plain v1 blob; anything else deletes both items.
@@ -360,11 +401,33 @@ enum SessionSeal {
     }
 }
 
-/// Settings › "Forget This Mac" (V3): both Keychain items and the
-/// remembered username go; the live session (if any) is untouched.
+/// Preference-driven vault operations shared by AppSession (pure enough
+/// to test with an in-memory store and a private defaults suite).
 enum SavedSignIn {
+    /// Settings › "Forget This Mac" (V3): both Keychain items and the
+    /// remembered username go; the live session (if any) is untouched.
     static func forgetThisMac(vault: SessionVault, defaults: UserDefaults) async {
         await vault.delete()
         AppSettings.clearLastUsername(in: defaults)
+    }
+
+    /// "Keep me signed in" switched (login checkbox or Settings — one
+    /// path for both, F8.5 review): writes the preference synchronously,
+    /// before any suspension; off also deletes both Keychain items.
+    static func setKeepSignedIn(_ keep: Bool, vault: SessionVault, defaults: UserDefaults) async {
+        AppSettings.setKeepsSignedIn(keep, in: defaults)
+        if !keep { await vault.delete() }
+    }
+
+    /// Launch / retry gate (F8.5 review): with "Keep me signed in" off no
+    /// remembered session may be resumed — a leftover item (written
+    /// before the preference was switched off elsewhere, or by a crash
+    /// mid-change) is deleted instead. True = the restore may proceed.
+    static func mayRestore(vault: SessionVault, defaults: UserDefaults) async -> Bool {
+        guard AppSettings.keepsSignedIn(defaults) else {
+            await vault.delete()
+            return false
+        }
+        return true
     }
 }

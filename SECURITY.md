@@ -23,7 +23,8 @@
 - **Nothing secret on disk by default:** the session (tokens) and
   unlocked key seeds live in actors in memory and die on sign-out/quit.
   Nothing secret in UserDefaults, SwiftData or plists (UserDefaults holds
-  preferences and the last username only).
+  preferences and — only while "Keep me signed in" is on — the last
+  username; signing in or out with it off clears that username).
 - **"Keep me signed in" (opt-in, off by default)** writes ONE Keychain item
   (`RememberedSession` v1): UID, refresh token, salted key password,
   username, timestamp. Never the password, SRP values, the access token or

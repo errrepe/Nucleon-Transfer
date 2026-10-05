@@ -8,6 +8,7 @@
 // diagnostic summary. Offline only — the real keychain is never touched.
 import CryptoKit
 import Foundation
+import LocalAuthentication
 import Security
 import Testing
 
@@ -315,6 +316,48 @@ struct TouchIDVaultTests {
         #expect(AppSettings.keepsSignedIn(defaults))
     }
 
+    @Test func failedKEKReadIsUnavailableAndKeeps() async throws {
+        let store = InMemoryKeychainStore()
+        try await SessionVault(store: store).save(sample(), sealed: true)
+        store.failNext(.biometricRead)
+        #expect(await SessionVault(store: store).unlock(reason: reason) == .failed(.unavailable))
+        #expect(store.raw(SessionVault.account) != nil)
+        #expect(store.raw(SessionVault.kekAccount) != nil)
+    }
+
+    @Test func concurrentUnlocksShareOnePrompt() async throws {
+        let store = InMemoryKeychainStore()
+        try await SessionVault(store: store).save(sample(), sealed: true)
+        let vault = SessionVault(store: store)
+        async let first = vault.unlock(reason: reason)
+        async let second = vault.unlock(reason: reason)
+        let results = await [first, second]
+        #expect(results == [.session(sample()), .session(sample())])
+        #expect(store.promptCount == 1)
+    }
+
+    /// The prompt suspends the vault (F8.5 review): a delete that lands
+    /// while it is up wins — the KEK that arrives afterwards is dropped,
+    /// not cached for a later sealed save.
+    @Test func itemsChangedDuringPromptDiscardsKEK() async throws {
+        let inner = InMemoryKeychainStore()
+        try await SessionVault(store: inner).save(sample(), sealed: true)
+        let oldKEK = inner.raw(SessionVault.kekAccount)
+        let store = GatedBiometricStore(inner: inner)
+        let vault = SessionVault(store: store)
+
+        let unlocking = Task { await vault.unlock(reason: reason) }
+        await store.waitForPrompt()
+        await vault.delete()
+        store.release()
+        #expect(await unlocking.value == .absent)
+
+        try await vault.save(sample(), sealed: true)
+        // No stale KEK was reused: a fresh one was written.
+        let newKEK = try #require(inner.raw(SessionVault.kekAccount))
+        #expect(newKEK != oldKEK)
+    }
+
     @Test func fakeRefusesSilentReadOfBiometricItem() throws {
         let store = InMemoryKeychainStore()
         try store.set(Data([1]), for: "k", protection: .biometryCurrentSet)
@@ -325,12 +368,36 @@ struct TouchIDVaultTests {
 }
 
 struct TouchIDPolicyTests {
-    @Test func keychainStatusClassification() {
-        #expect(KeychainStoreError(status: errSecUserCanceled).biometricFailure == .cancelled)
-        #expect(KeychainStoreError(status: errSecAuthFailed).biometricFailure == .unavailable)
-        #expect(KeychainStoreError(status: errSecInteractionNotAllowed).biometricFailure == .unavailable)
-        #expect(KeychainStoreError(status: errSecItemNotFound).biometricFailure == .invalidated)
-        #expect(KeychainStoreError(status: errSecIO).biometricFailure == nil)
+    /// F8.5 review: evaluatePolicy first, then the non-interactive read.
+    @Test func biometricReadClassification() {
+        // Evaluation outcomes decide alone (no read happens).
+        for status in [errSecSuccess, errSecAuthFailed, errSecItemNotFound] {
+            #expect(BiometricRead.classify(policy: .cancelled, readStatus: status) == .cancelled)
+            #expect(BiometricRead.classify(policy: .failed, readStatus: status) == .unavailable)
+            #expect(BiometricRead.classify(policy: .notEnrolled, readStatus: status) == .invalidated)
+        }
+        // A matched finger that the item refuses = the item is void: no
+        // "unavailable" retry loop on an invalidated .biometryCurrentSet item.
+        #expect(BiometricRead.classify(policy: .succeeded, readStatus: errSecSuccess) == nil)
+        #expect(BiometricRead.classify(policy: .succeeded, readStatus: errSecAuthFailed) == .invalidated)
+        #expect(BiometricRead.classify(policy: .succeeded, readStatus: errSecItemNotFound) == .invalidated)
+        #expect(BiometricRead.classify(policy: .succeeded, readStatus: errSecUserCanceled) == .cancelled)
+        #expect(BiometricRead.classify(policy: .succeeded, readStatus: errSecInteractionNotAllowed) == .unavailable)
+        #expect(BiometricRead.classify(policy: .succeeded, readStatus: errSecIO) == .unavailable)
+    }
+
+    @Test func policyErrorMapping() {
+        #expect(BiometricPolicyOutcome.from(.userCancel) == .cancelled)
+        #expect(BiometricPolicyOutcome.from(.appCancel) == .cancelled)
+        #expect(BiometricPolicyOutcome.from(.systemCancel) == .cancelled)
+        #expect(BiometricPolicyOutcome.from(.userFallback) == .cancelled)
+        #expect(BiometricPolicyOutcome.from(.biometryNotEnrolled) == .notEnrolled)
+        #expect(BiometricPolicyOutcome.from(.biometryLockout) == .failed)
+        #expect(BiometricPolicyOutcome.from(.biometryNotAvailable) == .failed)
+        #expect(BiometricPolicyOutcome.from(.authenticationFailed) == .failed)
+        #expect(BiometricPolicyOutcome.from(.notInteractive) == .failed)
+        #expect(BiometricPolicyOutcome.from(error: LAError(.userCancel)) == .cancelled)
+        #expect(BiometricPolicyOutcome.from(error: CancellationError()) == .failed)
     }
 
     @Test func restoreFailureBiometricDecisions() {
@@ -410,4 +477,40 @@ struct TouchIDQueryBuilderTests {
         #expect(KeychainItemInfo.accessibleName(nil) == "unknown")
         #expect(KeychainItemInfo.accessibleName("xyz") == "xyz")
     }
+}
+
+/// Forwards to an InMemoryKeychainStore, but holds each Touch ID read until
+/// `release()` — the vault is suspended on the prompt meanwhile.
+private final class GatedBiometricStore: KeychainStore {
+    private let inner: InMemoryKeychainStore
+    private let started: AsyncStream<Void>
+    private let startedContinuation: AsyncStream<Void>.Continuation
+    private let gate: AsyncStream<Void>
+    private let gateContinuation: AsyncStream<Void>.Continuation
+
+    init(inner: InMemoryKeychainStore) {
+        self.inner = inner
+        (started, startedContinuation) = AsyncStream.makeStream(of: Void.self)
+        (gate, gateContinuation) = AsyncStream.makeStream(of: Void.self)
+    }
+
+    func waitForPrompt() async {
+        for await _ in started { return }
+    }
+
+    func release() { gateContinuation.yield() }
+
+    func data(for account: String) throws -> Data? { try inner.data(for: account) }
+
+    func authenticatedData(for account: String, reason: String) async -> Result<Data, BiometricUnlockFailure> {
+        startedContinuation.yield()
+        for await _ in gate { break }
+        return await inner.authenticatedData(for: account, reason: reason)
+    }
+
+    func set(_ data: Data, for account: String, protection: KeychainProtection) throws {
+        try inner.set(data, for: account, protection: protection)
+    }
+
+    func delete(account: String) throws { try inner.delete(account: account) }
 }
