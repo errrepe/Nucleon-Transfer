@@ -427,7 +427,11 @@ final class BrowserModel {
     /// extra forced load is a belt-and-braces refresh, `load` dedupes.)
     func createFolder(named name: String) async throws {
         guard let ops = session.folderOps else {
-            throw session.isDemo ? FolderOperationError.demoMode : FolderOperationError.sessionNotReady
+            #if DEBUG
+            // Demo Mode (DEBUG-only) has no account to write to.
+            if session.isDemo { throw FolderOperationError.demoMode }
+            #endif
+            throw FolderOperationError.sessionNotReady
         }
         let linkID = try await ops.createFolder(name: name, in: current)
         await load(current, force: true)
