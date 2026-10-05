@@ -51,11 +51,13 @@ actor DemoDriveListing: DriveListingProviding {
     private let demoRoots = DriveRoots(
         myFiles: DriveRoot(
             shareID: "share-main", rootLinkID: "link-main-root",
-            volumeID: "vol-main", kind: .main, displayName: "My Files"
+            volumeID: "vol-main", kind: .main,
+            displayName: String(localized: "My Files", comment: "Sidebar: the user’s main Proton Drive volume")
         ),
         photos: DriveRoot(
             shareID: "share-photos", rootLinkID: "link-photos-root",
-            volumeID: "vol-photos", kind: .photos, displayName: "Photos"
+            volumeID: "vol-photos", kind: .photos,
+            displayName: String(localized: "Photos", comment: "Sidebar: the Proton Drive Photos volume")
         ),
         computers: [
             DriveRoot(

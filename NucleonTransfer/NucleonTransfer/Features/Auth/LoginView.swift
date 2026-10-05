@@ -166,7 +166,7 @@ struct LoginView: View {
             }
             // A prefilled username (failed 2FA/unlock, or a previous
             // sign-in): the password is what needs typing.
-            focus = username.isEmpty ? .username : .password
+            focusFirstEmptyField()
             // A 2FA failure lands back here with the error already set —
             // onChange missed it while the view was unmounted, so announce
             // it on appear too.
@@ -174,13 +174,19 @@ struct LoginView: View {
         }
         .onChange(of: session.loginError) { _, error in
             announce(error)
-            if error != nil, !isSigningIn { focus = .password }
+            if error != nil, !isSigningIn { focusFirstEmptyField() }
         }
         .onChange(of: isSigningIn) { _, signingIn in
             // The fields were disabled during SRP; after a failure the
             // (already cleared) password field gets focus back.
-            if !signingIn, session.loginError != nil { focus = .password }
+            if !signingIn, session.loginError != nil { focusFirstEmptyField() }
         }
+    }
+
+    /// The field that needs typing: the username when it's empty (e.g.
+    /// after a sign-out with no remembered account), else the password.
+    private func focusFirstEmptyField() {
+        focus = username.isEmpty ? .username : .password
     }
 
     /// The checkbox writes through AppSession (one path with Settings):

@@ -99,6 +99,12 @@ final class BrowserModel {
     var pendingTrash: Set<DriveItem.ID> = []
     /// Message for the action-failure alert (trash/create); nil = hidden.
     var actionError: String?
+    /// A sheet, dialog or alert of this browser is on screen. Menu-bar
+    /// commands step aside meanwhile — otherwise their requests queued up
+    /// behind the modal and opened one after another once it closed.
+    var isPresentingModal: Bool {
+        showingNewFolder || confirmingTrash || actionError != nil
+    }
     /// Mirrors the activity store's remote-changed token so views can key
     /// `.task(id:)` on it without touching AppSession (tracking flows
     /// through @Observable property access).
@@ -421,7 +427,7 @@ final class BrowserModel {
     /// extra forced load is a belt-and-braces refresh, `load` dedupes.)
     func createFolder(named name: String) async throws {
         guard let ops = session.folderOps else {
-            throw FolderOperationError.sessionNotReady
+            throw session.isDemo ? FolderOperationError.demoMode : FolderOperationError.sessionNotReady
         }
         let linkID = try await ops.createFolder(name: name, in: current)
         await load(current, force: true)

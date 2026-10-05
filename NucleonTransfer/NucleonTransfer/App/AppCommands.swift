@@ -35,7 +35,7 @@ extension FocusedValues {
 }
 
 struct AppCommands: Commands {
-    @FocusedValue(\.browserModel) private var browser
+    @FocusedValue(\.browserModel) private var focusedBrowser
     @FocusedValue(\.browserSearchFocused) private var searchFocused
     @AppStorage(BrowserPreferences.showPathBarKey) private var showPathBar = false
     @FocusedValue(\.appSession) private var session
@@ -177,6 +177,14 @@ struct AppCommands: Commands {
             Button("Report an Issue…") { open(HelpLinks.newIssue) }
             Button("Privacy & Security") { open(HelpLinks.security) }
         }
+    }
+
+    /// The focused browser, or nil while one of its sheets/dialogs/alerts
+    /// is up — every browser command then disables itself instead of
+    /// queueing a request behind the modal.
+    private var browser: BrowserModel? {
+        guard let focusedBrowser, !focusedBrowser.isPresentingModal else { return nil }
+        return focusedBrowser
     }
 
     /// Opens a help link in the default browser (no-op on a nil URL).

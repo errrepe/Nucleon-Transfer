@@ -15,6 +15,8 @@ enum FolderOperationError: LocalizedError, Sendable {
     case duplicateName(String)
     /// Write ops unavailable — resolver not wired (signed out mid-flight).
     case sessionNotReady
+    /// Demo Mode browses fixtures only: there is no account to write to.
+    case demoMode
 
     var errorDescription: String? {
         switch self {
@@ -22,6 +24,8 @@ enum FolderOperationError: LocalizedError, Sendable {
             return String(localized: "A folder named “\(name)” already exists.")
         case .sessionNotReady:
             return String(localized: "Session not ready. Sign in again.")
+        case .demoMode:
+            return String(localized: "Not available in Demo Mode. Sign in to create folders.")
         }
     }
 }

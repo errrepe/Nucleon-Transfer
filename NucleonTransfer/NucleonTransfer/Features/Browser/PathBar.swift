@@ -1,15 +1,18 @@
 // Nucleon Transfer — optional Finder-style path bar (F8.4-U3).
-// View ▸ Show Path Bar (⌥⌘P) pins it to the bottom safe-area inset of the
-// browser: one clickable segment per folder from the root down to the
-// open folder; a click pops the stack back to that folder.
+// View ▸ Show Path Bar (⌥⌘P) shows it under each folder's table: one
+// clickable segment per folder from the root down to that folder; a
+// click pops the stack back to it.
 import SwiftUI
 
 struct PathBar: View {
     /// By parameter, like FolderView (R2/B1 — no environment reads).
     let model: BrowserModel
+    /// The folder this bar describes — its own FolderView's, not
+    /// `model.current`, so a view mid-push/pop never shows another path.
+    let location: DriveLocation
 
     var body: some View {
-        let chain = model.ancestors(of: model.current)
+        let chain = model.ancestors(of: location)
         ScrollView(.horizontal) {
             HStack(spacing: 2) {
                 ForEach(Array(chain.enumerated()), id: \.offset) { index, location in
@@ -57,13 +60,14 @@ struct PathBar: View {
         DriveLocation(shareID: "share-main", linkID: "link-documents", name: "Documents"),
         DriveLocation(shareID: "share-main", linkID: "link-invoices", name: "Invoices"),
     ]
-    return PathBar(model: model)
+    return PathBar(model: model, location: model.current)
         .frame(width: 520)
         .preferredColorScheme(.light)
 }
 
 #Preview("Path Bar — Dark") {
-    PathBar(model: .preview())
+    let model = BrowserModel.preview()
+    return PathBar(model: model, location: model.current)
         .frame(width: 520)
         .preferredColorScheme(.dark)
 }

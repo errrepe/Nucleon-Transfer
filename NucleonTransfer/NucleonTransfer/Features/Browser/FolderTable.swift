@@ -46,6 +46,10 @@ struct FolderTable: View {
     /// sorted by BrowserModel.visibleItems(for:).
     let items: [DriveItem]
 
+    /// The folder this table lists — the upload destination for drops
+    /// between rows and below the last one.
+    let location: DriveLocation
+
     /// Passed in by FolderView — never read from the environment. A table
     /// inside a pushed navigationDestination cannot count on an object
     /// injected outside the NavigationStack (crash B1). @Bindable keeps
@@ -135,6 +139,15 @@ struct FolderTable: View {
                     TableRow(item)
                         .onHover { hover.track(item, hovering: $0) }
                 }
+            }
+            // Live check: once any row has a dropDestination the
+            // NSTableView owns file drags and refuses them off those rows,
+            // so FolderView's table-level .onDrop never saw a drop on file
+            // rows or the empty area. An insertion drop (between rows /
+            // below the last) uploads into the open folder instead.
+            .dropDestination(for: URL.self) { _, urls in
+                guard model.canUpload else { return }
+                Task { await model.upload(urls: urls, to: location) }
             }
         }
         // M3: with zero rows the zebra stripes still draw behind the
