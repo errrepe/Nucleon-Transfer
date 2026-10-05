@@ -77,6 +77,8 @@ final class BrowserModel {
     /// loading one folder never invalidates another folder's views.
     @ObservationIgnored private var folders: [String: FolderStore] = [:]
     var selection: Set<DriveItem.ID> = []
+    /// Table sort; seeded from the saved preference (F8.4-U4 — the
+    /// container writes changes back to @AppStorage).
     var sortOrder: [KeyPathComparator<DriveItem>] = [
         KeyPathComparator(\.name, comparator: .localizedStandard)
     ]
@@ -149,9 +151,14 @@ final class BrowserModel {
     private var previewBannerDismissed = false
     #endif
 
-    init(root: DriveRoot, session: AppSession) {
+    init(
+        root: DriveRoot,
+        session: AppSession,
+        sortOrder: [KeyPathComparator<DriveItem>]? = nil
+    ) {
         self.root = root
         self.session = session
+        if let sortOrder { self.sortOrder = sortOrder }
         rootLocation = DriveLocation(
             shareID: root.shareID,
             linkID: root.rootLinkID,
@@ -230,6 +237,26 @@ final class BrowserModel {
             else { return }
             store.phase = .failed(UserFacingError.message(for: error))
         }
+    }
+
+    /// F8.4-U4: reopens the folder chain saved for this root (link IDs
+    /// only) after a relaunch. Best-effort: each folder must still sit in
+    /// the previous one (FolderPathRestoration stops at the first missing
+    /// link), and nothing happens if the user navigated meanwhile.
+    func restorePath(linkIDs: [String]) async {
+        guard !previewStubbed, path.isEmpty, !linkIDs.isEmpty,
+              let listing = session.listing
+        else { return }
+        let resolved = await FolderPathRestoration.resolve(
+            linkIDs: linkIDs, root: rootLocation
+        ) { location in
+            let store = self.state(for: location)
+            if store.phase == .loaded, !store.isStale { return store.items }
+            guard self.session.listing === listing else { return nil }
+            return try? await listing.children(of: location)
+        }
+        guard path.isEmpty, session.listing === listing, !resolved.isEmpty else { return }
+        path = resolved
     }
 
     /// Primary activation (double click / Open). Folders push onto the

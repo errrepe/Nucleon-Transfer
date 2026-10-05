@@ -4,11 +4,24 @@
 // spinner; on failure, a retryable unavailable view.
 // S3.2: transfers UI moved to the FolderView toolbar popover
 // (TransfersToolbarButton) — the queue sheet is gone.
+// F8.4-U4: the sidebar selection lives in @SceneStorage (SidebarItem's
+// string form), read directly by the binding so the first frame already
+// shows the restored root; a vanished share falls back to the first root.
 import SwiftUI
 
 struct MainView: View {
     @Environment(AppSession.self) private var session
-    @State private var selection: SidebarItem? = .myFiles
+    /// SidebarItem.storageValue; "" = nothing selected.
+    @SceneStorage(BrowserPreferences.sidebarSelectionKey)
+    private var storedSelection = SidebarItem.myFiles.storageValue
+
+    private var selection: Binding<SidebarItem?> {
+        Binding(
+            // Unreadable (older/garbled) values fall back to My Files.
+            get: { storedSelection.isEmpty ? nil : SidebarItem(storageValue: storedSelection) ?? .myFiles },
+            set: { storedSelection = $0?.storageValue ?? "" }
+        )
+    }
 
     var body: some View {
         Group {
@@ -31,7 +44,7 @@ struct MainView: View {
 
     private func splitView(roots: DriveRoots) -> some View {
         NavigationSplitView {
-            SidebarView(selection: $selection)
+            SidebarView(selection: selection)
                 .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
         } detail: {
             if let root = selectedRoot(in: roots) {
@@ -59,8 +72,8 @@ struct MainView: View {
     /// after a reload falls back to the first root so the detail never
     /// strands.
     private func selectedRoot(in roots: DriveRoots) -> DriveRoot? {
-        guard let selection else { return nil }
-        return selection.root(in: roots) ?? roots.all.first
+        guard let item = selection.wrappedValue else { return nil }
+        return item.root(in: roots) ?? roots.all.first
     }
 }
 

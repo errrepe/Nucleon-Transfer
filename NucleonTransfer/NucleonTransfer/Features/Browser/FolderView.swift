@@ -30,6 +30,9 @@ struct FolderView: View {
     /// (crash B1: EnvironmentValues assert). @Bindable keeps the $model.*
     /// bindings the toolbar, sheet and dialogs use.
     @Bindable var model: BrowserModel
+    /// Column widths/visibility/order, owned by BrowserContainerView's
+    /// @SceneStorage (F8.4-U4) — one value for every folder in the stack.
+    @Binding var columnCustomization: TableColumnCustomization<DriveItem>
     /// True while a file drag hovers the table — drives DropOverlay.
     @State private var isTargeted = false
     /// The row under the pointer, written by FolderTable — while a drag
@@ -148,7 +151,10 @@ struct FolderView: View {
     /// navigating while the providers resolve can't retarget the upload.
     @ViewBuilder
     private var tableWithUploadDrop: some View {
-        let table = FolderTable(items: items, model: model, hover: hover)
+        let table = FolderTable(
+            items: items, model: model, hover: hover,
+            columnCustomization: $columnCustomization
+        )
             .overlay { stateOverlay }
             .overlay {
                 if isTargeted {

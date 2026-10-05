@@ -13,6 +13,10 @@
 // every FolderView in the stack; the filter field's focus is published
 // to the menu bar (⌘⌫ must stay delete-to-line-start while typing); the
 // optional path bar sits in the bottom safe-area inset.
+// F8.4-U4: per-window state survives relaunch — the open folder chain
+// (@SceneStorage, link IDs only, re-walked best-effort after the roots
+// load) and the table's column widths/visibility/order; the sort order is
+// app-wide (@AppStorage).
 import SwiftUI
 
 struct BrowserContainerView: View {
@@ -21,21 +25,32 @@ struct BrowserContainerView: View {
     @FocusState private var isSearchFocused: Bool
     /// View ▸ Show Path Bar (⌥⌘P).
     @AppStorage(BrowserPreferences.showPathBarKey) private var showPathBar = false
+    /// Last sort column + direction (BrowserSortPreference raw value).
+    @AppStorage(BrowserPreferences.sortOrderKey) private var savedSort = BrowserSortPreference.default.rawValue
+    /// Share ID + folder link IDs of the open folder (FolderPathRestoration).
+    @SceneStorage(BrowserPreferences.lastFolderKey) private var lastFolder = ""
+    /// Column widths, visibility and order — shared by every FolderTable
+    /// in the stack.
+    @SceneStorage(BrowserPreferences.columnCustomizationKey)
+    private var columnCustomization = TableColumnCustomization<DriveItem>()
 
     init(root: DriveRoot, session: AppSession) {
-        _model = State(initialValue: BrowserModel(root: root, session: session))
+        _model = State(initialValue: BrowserModel(
+            root: root, session: session,
+            sortOrder: BrowserPreferences.savedSortOrder()
+        ))
     }
 
     var body: some View {
         @Bindable var model = model
         NavigationStack(path: $model.path) {
-            FolderView(location: model.rootLocation, model: model)
+            FolderView(location: model.rootLocation, model: model, columnCustomization: $columnCustomization)
                 // Safety net on the stack root (R2/B1): any future child
                 // that still reads the environment sees the objects.
                 .environment(model)
                 .environment(model.session)
                 .navigationDestination(for: DriveLocation.self) { location in
-                    FolderView(location: location, model: model)
+                    FolderView(location: location, model: model, columnCustomization: $columnCustomization)
                         // Same net inside the destination closure — this
                         // content is hosted off-hierarchy by the stack.
                         .environment(model)
@@ -103,6 +118,25 @@ struct BrowserContainerView: View {
         // the touched parents → token bumps → markStale + reload.
         .task(id: model.remoteChangedToken) {
             model.observeRemoteChanges()
+        }
+        // F8.4-U4: reopen the saved folder chain once, best-effort. A
+        // path saved for another root is replaced by this root's (so
+        // switching roots never jumps into an old deep folder later).
+        .task {
+            if let saved = FolderPathRestoration.decode(lastFolder),
+               saved.shareID == model.root.shareID {
+                await model.restorePath(linkIDs: saved.linkIDs)
+            } else {
+                lastFolder = FolderPathRestoration.encode(shareID: model.root.shareID, path: model.path)
+            }
+        }
+        .onChange(of: model.path) { _, path in
+            lastFolder = FolderPathRestoration.encode(shareID: model.root.shareID, path: path)
+        }
+        .onChange(of: model.sortOrder) { _, order in
+            if let preference = BrowserSortPreference(comparators: order) {
+                savedSort = preference.rawValue
+            }
         }
         .environment(model)
         // Children that need the session (S3.2 TransfersToolbarButton)

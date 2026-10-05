@@ -17,6 +17,9 @@
 // re-evaluate FolderView/FolderTable, only the drop overlay that reads it.
 // F8.4-U3: a Kind column (UTType description, "Folder" for folders) and
 // Finder-style Modified dates ("Today at 14:32", "Yesterday at …").
+// F8.4-U4: every column carries a customizationID, so widths, visibility
+// (header right-click) and order persist via the container's
+// @SceneStorage TableColumnCustomization. Name can't be hidden.
 import SwiftUI
 
 /// The row under the pointer, written by FolderTable's row hover handlers
@@ -54,8 +57,16 @@ struct FolderTable: View {
     /// from hover callbacks only, never read in `body`.
     let hover: RowHoverState
 
+    /// Persisted column layout (F8.4-U4).
+    @Binding var columnCustomization: TableColumnCustomization<DriveItem>
+
     var body: some View {
-        Table(of: DriveItem.self, selection: $model.selection, sortOrder: $model.sortOrder) {
+        Table(
+            of: DriveItem.self,
+            selection: $model.selection,
+            sortOrder: $model.sortOrder,
+            columnCustomization: $columnCustomization
+        ) {
             TableColumn("Name", value: \.name, comparator: .localizedStandard) { item in
                 HStack(spacing: 6) {
                     FileIcon(item: item)
@@ -85,24 +96,29 @@ struct FolderTable: View {
                 .accessibilityLabel(Self.nameAccessibilityLabel(for: item))
             }
             .width(min: 160, ideal: 280)
+            .customizationID("name")
+            .disabledCustomizationBehavior(.visibility)
             TableColumn("Kind", value: \.kindDescription, comparator: .localizedStandard) { item in
                 Text(item.kindDescription)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             .width(min: 80, ideal: 120)
+            .customizationID("kind")
             TableColumn("Modified", value: \.modified) { item in
                 Text(ModifiedDateFormatting.string(for: item.modified))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .lineLimit(1)
             }
+            .customizationID("modified")
             TableColumn("Size", value: \.size) { item in
                 Text(DriveFormatting.size(item))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
             .alignment(.trailing)
+            .customizationID("size")
         } rows: {
             ForEach(items) { item in
                 if item.isFolder && model.canUpload {
