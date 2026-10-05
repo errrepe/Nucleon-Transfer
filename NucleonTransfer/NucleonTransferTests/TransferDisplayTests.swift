@@ -293,4 +293,27 @@ struct TransferDisplayTests {
         #expect(TransferBadge.failed(1).summary == "1 failed")
         #expect(TransferBadge.none.summary == nil)
     }
+
+    // MARK: - F8.4-U8 status glyphs + VoiceOver value
+
+    @Test func statusGlyphsDoNotRelyOnColor() {
+        let failed = TransferDisplay.item(for: job(state: .failed), destinationName: nil)
+        let cancelled = TransferDisplay.item(for: record(state: .cancelled))
+        let done = TransferDisplay.item(for: record(state: .done))
+        #expect(failed.statusSymbol == "exclamationmark.triangle.fill")
+        #expect(cancelled.statusSymbol == "xmark.circle")
+        #expect(cancelled.isCancelled && !cancelled.isFailed)
+        #expect(done.statusSymbol == nil)
+    }
+
+    @Test func accessibilityValuePrefixesFailures() {
+        let failed = TransferDisplay.item(
+            for: record(state: .failed, errorMessage: "Network connection lost.")
+        )
+        #expect(failed.accessibilityValue == "Failed, Network connection lost.")
+        let active = TransferDisplay.item(for: record(state: .downloading, progress: 0.45))
+        #expect(active.accessibilityValue == active.subtitle)
+        #expect(active.progressText == "45%")
+        #expect(TransferDisplay.item(for: record(state: .done)).progressText == nil)
+    }
 }

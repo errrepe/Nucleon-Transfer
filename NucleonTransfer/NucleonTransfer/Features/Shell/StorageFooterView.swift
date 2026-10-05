@@ -17,6 +17,12 @@ struct StorageFooterView: View {
         return (account.usedBytes, max)
     }
 
+    /// "1.2 GB of 5 GB used"-style text shared by the caption and the
+    /// gauge's accessibility value.
+    private var storageText: String? {
+        session.account.map { DriveFormatting.storage(used: $0.usedBytes, max: $0.maxBytes) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             #if DEBUG
@@ -39,9 +45,13 @@ struct StorageFooterView: View {
                 }
                 .gaugeStyle(.linearCapacity)
                 .tint(quotaTint(for: Double(quota.used) / Double(quota.max)))
+                // F8.4-U8: the label is visually empty — name it for
+                // VoiceOver and read the same "used of total" text.
+                .accessibilityLabel("Storage")
+                .accessibilityValue(storageText ?? "")
             }
-            if let account = session.account {
-                Text(DriveFormatting.storage(used: account.usedBytes, max: account.maxBytes))
+            if let storageText {
+                Text(storageText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()

@@ -12,7 +12,8 @@ import Foundation
 /// `isActive` = in-flight section membership (queued / uploading / paused /
 /// downloading). `isFailed` drives the red subtitle — cancelled uploads sit
 /// in the Failed section but keep a neutral subtitle (user-initiated, not
-/// an error).
+/// an error); `isCancelled` gives them their own glyph (F8.4-U8: state is
+/// never conveyed by color alone).
 struct TransferDisplayItem: Identifiable, Sendable, Equatable {
     enum Direction: String, Sendable, Equatable {
         case upload
@@ -27,7 +28,28 @@ struct TransferDisplayItem: Identifiable, Sendable, Equatable {
     let progress: Double?
     let isActive: Bool
     let isFailed: Bool
+    var isCancelled = false
     let updatedAt: Date
+
+    /// SF Symbol shown beside the subtitle so failure/cancellation reads
+    /// without color (F8.4-U8); nil for every other state.
+    var statusSymbol: String? {
+        if isFailed { return "exclamationmark.triangle.fill" }
+        if isCancelled { return "xmark.circle" }
+        return nil
+    }
+
+    /// VoiceOver value for the combined row: the subtitle, prefixed with
+    /// "Failed" when the subtitle is an error message (the red color and
+    /// glyph are invisible to VoiceOver).
+    var accessibilityValue: String {
+        isFailed ? String(localized: "Failed, \(subtitle)") : subtitle
+    }
+
+    /// "42 percent"-style value for the progress bar ("42%").
+    var progressText: String? {
+        progress.map(TransferRateText.percent)
+    }
 }
 
 /// Toolbar badge (F8.4-U6): failures win (red, failed count + glyph);
@@ -93,6 +115,7 @@ enum TransferDisplay {
             progress: uploadProgress(job),
             isActive: section(of: job) == .active,
             isFailed: job.state == .failed,
+            isCancelled: job.state == .cancelled,
             updatedAt: job.updatedAt
         )
     }
@@ -110,6 +133,7 @@ enum TransferDisplay {
             progress: record.state == .downloading ? record.progress : nil,
             isActive: record.state == .downloading,
             isFailed: record.state == .failed,
+            isCancelled: record.state == .cancelled,
             updatedAt: record.updatedAt
         )
     }
