@@ -74,11 +74,16 @@ plus `NucleonTransfer/NucleonTransferTests/` directly.
   keys and session seeds live in actors in memory. Nothing is written to
   Keychain, UserDefaults or plists — signing in again is required on every
   launch, like the official app.
-- The password exists as `Data` only between sign-in and the key unlock,
-  and its buffer is zeroed on every exit path (success, error, cancel,
-  sign-out).
+- The password is kept as `Data` only between sign-in and the key unlock,
+  and that buffer is zeroed on every exit path (success, error, cancel,
+  sign-out). Buffers the app owns — bcrypt state, the password hash, the
+  salted key password, decrypted key passphrases and cached key seeds —
+  are zeroed **best-effort** once used. Swift cannot guarantee the same for
+  copies the runtime makes (the password field's `String`, CryptoKit key
+  objects, buffers still shared with other live values): those are
+  dropped, not wiped.
 - **Sign-out** revokes the session server-side (`DELETE /auth/v4`,
-  best-effort) and wipes all in-memory key material.
+  best-effort) and drops all in-memory key material, zeroing what it owns.
 - **On disk:** only the upload queue (`transfer-queue.json` under
   Application Support) — paths, IDs and progress, no secrets.
 - No telemetry, no analytics, no third-party crash reporters.

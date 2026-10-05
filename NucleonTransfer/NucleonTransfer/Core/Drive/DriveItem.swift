@@ -18,6 +18,11 @@ struct DriveItem: Identifiable, Hashable, Sendable {
     let size: Int64
     let modified: Date
     let mimeType: String?
+    /// The item's name signature could not be verified (missing, invalid,
+    /// weak hash or unknown signer — F8.1-S2). Browsing continues; the UI
+    /// shows a warning badge, like the official clients' "signature could
+    /// not be verified" state.
+    var signatureIssue: Bool = false
 
     var isFolder: Bool { kind == .folder }
     var fileExtension: String { (name as NSString).pathExtension.lowercased() }
@@ -27,7 +32,8 @@ struct DriveItem: Identifiable, Hashable, Sendable {
 extension DriveItem {
     /// Builds a row from a wire link. `decryptedName == nil` means the F3b
     /// chain could not read the name — the row still renders, flagged.
-    init(link: DriveLink, shareID: String, decryptedName: String?) {
+    /// `signatureIssue` flags a decrypted name whose signature failed.
+    init(link: DriveLink, shareID: String, decryptedName: String?, signatureIssue: Bool = false) {
         self.init(
             id: link.linkID,
             shareID: shareID,
@@ -37,7 +43,8 @@ extension DriveItem {
             kind: link.isFolder ? .folder : .file,
             size: link.isFolder ? 0 : link.size,
             modified: Date(timeIntervalSince1970: TimeInterval(link.modifyTime)),
-            mimeType: link.mimeType
+            mimeType: link.mimeType,
+            signatureIssue: signatureIssue
         )
     }
 }

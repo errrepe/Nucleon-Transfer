@@ -5,10 +5,12 @@
 // own shareKeys/nodes/roots dictionaries (P6).
 //
 // Flow per file (rclone-captured /tmp/f5ref):
-//   getLink -> unlockNode (parent candidates + address signer points) ->
-//   openContentKey (node candidates) -> getRevision (activeRevision.ID,
-//   fallback: listRevisions last) -> download blocks in parallel (TaskGroup,
-//   max 4) -> FileDownload.reassemble (hash-verify + decrypt) ->
+//   getLink -> unlockNode (parent candidates + SignatureEmail signer points,
+//   fail-closed) -> openContentKey (node candidates) + content-key signature
+//   -> getRevision (activeRevision.ID, fallback: listRevisions last) ->
+//   manifest signature (F8.1-S2) -> download blocks in parallel (TaskGroup,
+//   max 4) -> FileDownload.reassemble (hash-verify + decrypt + block
+//   EncSignature) ->
 //   atomicWrite to a conflict-free destination.
 // Folders download recursively (children listing + name decrypt), preserving
 // structure; files within one folder download with bounded parallelism.
@@ -42,28 +44,77 @@ actor DriveDownloadAdapter {
         parentKeys: [KeyringCache.UnlockedKey],
         progress: (@Sendable (Int, Int) async -> Void)? = nil
     ) async throws -> Data {
-        let signers = DecryptChain.edPoints(addressKeys)
         let nodeKeys = try DecryptChain.unlockNode(
             link, parentCandidates: parentKeys.compactMap(\.candidate),
-            signerPoints: signers
+            signerPoints: DecryptChain.nodeSignerPoints(
+                link, parentKeys: parentKeys, addressKeys: addressKeys
+            )
         )
         guard let ckp = link.fileProperties?.contentKeyPacket, !ckp.isEmpty else {
             throw FileDownloadError.missingContentKey
         }
+        let nodeCandidates = nodeKeys.compactMap(\.candidate)
         let (cipher, contentKey) = try FileUpload.openContentKey(
-            ckp, nodeCandidates: nodeKeys.compactMap(\.candidate)
+            ckp, nodeCandidates: nodeCandidates
         )
         guard cipher == FileUpload.sessionCipher || [7, 8, 9].contains(cipher) else {
             throw FileDownloadError.missingContentKey
         }
+        // F8.1-S2 content integrity: node key + the link author's address
+        // keys may sign the content key (C# SDK NodeCrypto.cs
+        // GetContentKeyAndHashKeyVerificationKeyRing).
+        // Signer sets come from server-claimed emails, so they always
+        // include the node key (FileDownload.trustedSigners): `.noVerifier`
+        // can never pass.
+        let nodePoints = DecryptChain.edPoints(nodeKeys)
+        try FileDownload.verifyContentKey(
+            signature: link.fileProperties?.contentKeyPacketSignature,
+            sessionKey: contentKey, packetRaw: Data(base64Encoded: ckp),
+            signerPoints: FileDownload.trustedSigners(
+                claimedEmail: link.signatureEmail, nodePoints: nodePoints,
+                addressKeys: addressKeys
+            ).points
+        )
         let revisionID = try await revisionID(shareID: shareID, link: link)
         let revision = try await drive.getRevision(
             shareID: shareID, linkID: link.linkID, revisionID: revisionID
         )
-        guard !revision.blocks.isEmpty else {
+        let ordered = revision.blocks.sorted { $0.index < $1.index }
+        // Manifest BEFORE any block is fetched: the signed hash list pins
+        // every block (reassemble then checks bytes against those hashes).
+        // Signer: the revision's SignatureEmail address keys (C# SDK
+        // RevisionReader.cs VerifyManifestAsync), else the link author's;
+        // the node key always. A foreign/unknown claimed email is NOT
+        // trusted: only the node key or the user's own address keys can
+        // then vouch for the manifest, otherwise the download stops.
+        // Empty files are verified too (manifest over zero block hashes):
+        // RevisionReader.ReadAsync has no empty-file short-circuit and
+        // throws on NotSigned, and every uploader (Nucleon, Proton-API-Bridge)
+        // signs the empty manifest.
+        let revisionEmail = revision.signatureEmail ?? ""
+        let signers = FileDownload.trustedSigners(
+            claimedEmail: revisionEmail.isEmpty ? link.signatureEmail : revisionEmail,
+            nodePoints: nodePoints, addressKeys: addressKeys
+        )
+        try FileDownload.verifyManifest(
+            signature: revision.manifestSignature,
+            variants: FileDownload.manifestVariants(
+                blockHashesB64: ordered.map(\.hash),
+                thumbnails: revision.thumbnails,
+                legacyThumbnailHash: revision.thumbnailHash
+            ),
+            signerPoints: signers.points,
+            claimResolved: signers.claimResolved
+        )
+        guard !ordered.isEmpty else {
             return Data() // 0-byte file: no blocks (upload parity §1.4)
         }
-        let ordered = revision.blocks.sorted { $0.index < $1.index }
+        // Block EncSignatures: same trusted set (Proton-API-Bridge
+        // file_download.go getSignatureVerificationKeyring: uploader's
+        // address keys + node key).
+        let blockCheck = FileDownload.BlockSignatureCheck(
+            nodeCandidates: nodeCandidates, signerPoints: signers.points
+        )
         var fetched = [FileDownload.FetchedBlock?](repeating: nil, count: ordered.count)
         try await withThrowingTaskGroup(of: (Int, FileDownload.FetchedBlock).self) { group in
             var next = 0
@@ -74,7 +125,8 @@ actor DriveDownloadAdapter {
                     let bytes = try await self.drive.downloadBlockBytes(block: block)
                     return (i, FileDownload.FetchedBlock(
                         index: block.index, encrypted: bytes,
-                        expectedHashB64: block.hash
+                        expectedHashB64: block.hash,
+                        encSignature: block.encSignature
                     ))
                 }
             }
@@ -94,7 +146,8 @@ actor DriveDownloadAdapter {
             }
         }
         return try FileDownload.reassemble(
-            blocks: fetched.compactMap { $0 }, contentKey: contentKey
+            blocks: fetched.compactMap { $0 }, contentKey: contentKey,
+            signatures: blockCheck
         )
     }
 
@@ -119,10 +172,12 @@ actor DriveDownloadAdapter {
             shareID: shareID, link: link, parentKeys: parentKeys,
             progress: progress
         )
-        let name = ((try? DecryptChain.decryptName(
+        let name = (try? DecryptChain.decryptName(
             link, parentCandidates: parentKeys.compactMap(\.candidate)
-        )) ?? link.linkID).precomposedStringWithCanonicalMapping
-        let dest = FileDownload.uniqueDestination(in: directory, name: name)
+        )) ?? link.linkID
+        let dest = try FileDownload.safeFileDestination(
+            in: directory, remoteName: name, fallback: link.linkID, root: directory
+        )
         try FileDownload.atomicWrite(bytes, to: dest)
         return dest
     }
@@ -145,17 +200,21 @@ actor DriveDownloadAdapter {
             let bytes = try await downloadFileBytes(
                 shareID: shareID, link: link, parentKeys: parentKeys
             )
-            let name = ((try? DecryptChain.decryptName(
+            let name = (try? DecryptChain.decryptName(
                 link, parentCandidates: parentKeys.compactMap(\.candidate)
-            )) ?? link.linkID).precomposedStringWithCanonicalMapping
-            let dest = FileDownload.uniqueDestination(in: destination, name: name)
+            )) ?? link.linkID
+            let dest = try FileDownload.safeFileDestination(
+                in: destination, remoteName: name, fallback: link.linkID, root: destination
+            )
             try FileDownload.atomicWrite(bytes, to: dest)
-            if let progress { await progress(name, Int64(bytes.count), Int64(bytes.count)) }
+            if let progress {
+                await progress(dest.lastPathComponent, Int64(bytes.count), Int64(bytes.count))
+            }
             return [dest]
         }
         return try await downloadFolder(
             shareID: shareID, folderLinkID: linkID, localDir: destination,
-            progress: progress
+            root: destination, progress: progress
         )
     }
 
@@ -163,6 +222,7 @@ actor DriveDownloadAdapter {
         shareID: String,
         folderLinkID: String,
         localDir: URL,
+        root: URL,
         progress: (@Sendable (String, Int64, Int64) async -> Void)? = nil
     ) async throws -> [URL] {
         let folderKeys = try await resolver.nodeKeys(shareID: shareID, linkID: folderLinkID)
@@ -175,7 +235,9 @@ actor DriveDownloadAdapter {
             at: localDir, withIntermediateDirectories: true
         )
         // Decrypt names first (cheap, local), then subfolders recurse and
-        // files download with bounded parallelism.
+        // files download with bounded parallelism. `name` is the RAW
+        // decrypted (untrusted) name: safeSubdirectory/safeFileDestination
+        // sanitize it (SafeFilename) and check the result against `root`.
         struct NamedChild: Sendable {
             var link: DriveLink
             var name: String
@@ -183,18 +245,21 @@ actor DriveDownloadAdapter {
         let named = children.map { child in
             NamedChild(
                 link: child,
-                name: ((try? DecryptChain.decryptName(
+                name: (try? DecryptChain.decryptName(
                     child, parentCandidates: candidates
-                )) ?? child.linkID).precomposedStringWithCanonicalMapping
+                )) ?? child.linkID
             )
         }
         var out: [URL] = []
         // Subfolders first (structure before bytes, TRANSFERS.md §2.2).
         for child in named.filter({ $0.link.isFolder }) {
-            let subdir = localDir.appendingPathComponent(child.name, isDirectory: true)
+            let subdir = try FileDownload.safeSubdirectory(
+                in: localDir, remoteName: child.name,
+                fallback: child.link.linkID, root: root
+            )
             let got = try await downloadFolder(
                 shareID: shareID, folderLinkID: child.link.linkID,
-                localDir: subdir, progress: progress
+                localDir: subdir, root: root, progress: progress
             )
             out.append(contentsOf: got)
         }
@@ -208,12 +273,13 @@ actor DriveDownloadAdapter {
                         shareID: shareID, link: child.link,
                         parentKeys: folderKeys
                     )
-                    let dest = FileDownload.uniqueDestination(
-                        in: localDir, name: child.name
+                    let dest = try FileDownload.safeFileDestination(
+                        in: localDir, remoteName: child.name,
+                        fallback: child.link.linkID, root: root
                     )
                     try FileDownload.atomicWrite(bytes, to: dest)
                     if let progress {
-                        await progress(child.name, Int64(bytes.count), Int64(bytes.count))
+                        await progress(dest.lastPathComponent, Int64(bytes.count), Int64(bytes.count))
                     }
                     return [dest]
                 }

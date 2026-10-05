@@ -2,8 +2,10 @@
 // Owns the ONLY SessionManager / KeyringCache / DriveClient / TransferQueue /
 // TransferActivityStore; views read them via .environment (injected at the
 // WindowGroup). Secrets stay inside the owning actors, memory only; the
-// password exists as Data solely between signIn and the post-2FA key unlock,
-// then is zeroed on every path (success, error, cancel, sign-out).
+// password is retained as Data solely between signIn and the post-2FA key
+// unlock, and that buffer is zeroed on every path (success, error, cancel,
+// sign-out). Best-effort: the String the login field handed over, and any
+// copy the runtime made, cannot be wiped (F8.1-S7).
 import Foundation
 
 @MainActor
@@ -156,8 +158,9 @@ final class AppSession {
         roots = nil
         rootsError = nil
         await sessions.signOut()
-        await keyrings.lock()
+        // Drop our seed references first so lock() can zero the last copy.
         addressKeys = []
+        await keyrings.lock()
         clearPendingPassword()
         loginUsername = nil
         account = nil
@@ -210,7 +213,10 @@ final class AppSession {
     private func finishSignIn() async throws {
         guard let pwd = pendingPassword else { throw ProtonAPIError.unauthorized }
         let primaryID = try await keyrings.fetchUser().primaryKey?.id ?? ""
-        let salted = try await sessions.fetchSaltedKeyPass(password: pwd, primaryKeyID: primaryID)
+        var salted = try await sessions.fetchSaltedKeyPass(password: pwd, primaryKeyID: primaryID)
+        // Password-equivalent: zeroed once the user keys are unlocked (or
+        // the unlock failed). KeyringCache's copy is gone by then.
+        defer { SecureBytes.wipe(&salted) }
         let userKeys = try await keyrings.unlockUserKeys(saltedPass: salted)
         addressKeys = try await keyrings.unlockAddressKeys(userKeys: userKeys)
         let resolver = NodeKeyResolver(source: drive, addressKeys: addressKeys)
@@ -235,16 +241,16 @@ final class AppSession {
         await coordinator.start()
     }
 
-    /// Scrubs the retained password: resetBytes writes zeros into the buffer
-    /// BEFORE the reference drops. Call sites run only after every `let pwd`
-    /// copy is out of scope, so pendingPassword uniquely owns its storage and
-    /// the mutation hits the real bytes (Data is copy-on-write — zeroing a
-    /// shared copy would silently scrub a detached buffer instead).
+    /// Scrubs the retained password: SecureBytes (memset_s) zeroes the
+    /// buffer BEFORE the last reference drops. Call sites run only after
+    /// every `let pwd` copy is out of scope, and the property is cleared
+    /// before the wipe, so `retained` uniquely owns the storage and the
+    /// write hits the real bytes (Data is copy-on-write — zeroing a shared
+    /// copy would silently scrub a detached buffer instead).
     private func clearPendingPassword() {
-        if let count = pendingPassword?.count {
-            pendingPassword?.resetBytes(in: 0..<count)
-        }
+        guard var retained = pendingPassword else { return }
         pendingPassword = nil
+        SecureBytes.wipe(&retained)
     }
 }
 

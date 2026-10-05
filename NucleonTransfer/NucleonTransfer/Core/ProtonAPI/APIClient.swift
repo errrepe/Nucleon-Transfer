@@ -1,11 +1,65 @@
 // Nucleon Transfer — minimal Proton REST client.
 // Mirrors go-proton-api Manager.r(): base mail.proton.me/api, x-pm-appversion,
 // x-pm-uid + Bearer on authed calls, 401 -> single refresh retry (in SessionManager).
+// Network hygiene (F8.1-S4): one dedicated ephemeral URLSession (no disk
+// cache, no cookie jar); storage URLs are host-checked before credentials go out.
+// Redirects (F8.1-S6) are only followed to the same https host — a 3xx can
+// never carry a request (and its headers) past `validatedStorageURL`.
 import Foundation
 
 struct APIClient: Sendable {
     var baseURL: URL = AppVersion.baseURL
-    var session: URLSession = .shared
+    /// Injectable for tests (URLProtocol stubs); production shares `defaultSession`.
+    var session: URLSession = APIClient.defaultSession
+
+    /// One process-wide session so HTTP/2 connections to the API and storage
+    /// hosts are reused. Ephemeral + nil cache/cookie storage: authenticated
+    /// responses (armored keys, salts, Drive metadata) never land in a
+    /// Cache.db and no cookie jar persists — README "nothing on disk".
+    /// `RedirectGuard` refuses any redirect that leaves the original host.
+    static let defaultSession = URLSession(configuration: makeConfiguration(),
+                                           delegate: RedirectGuard(), delegateQueue: nil)
+
+    /// The hardened configuration, exposed so tests can assert it and layer
+    /// `protocolClasses` on top of the exact production settings.
+    static func makeConfiguration() -> URLSessionConfiguration {
+        let config = URLSessionConfiguration.ephemeral
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.httpCookieStorage = nil
+        config.httpCookieAcceptPolicy = .never
+        config.httpShouldSetCookies = false
+        config.urlCredentialStorage = nil
+        config.timeoutIntervalForRequest = 60
+        // 4 MiB blocks on slow links: generous whole-transfer ceiling.
+        config.timeoutIntervalForResource = 15 * 60
+        config.httpMaximumConnectionsPerHost = 6
+        return config
+    }
+
+    /// Validates a server-supplied storage URL (block BareURL / URL) BEFORE
+    /// any credential is attached: https only, no userinfo, and a host equal
+    /// to or under one of `AppVersion.storageHostSuffixes`. A hostile or
+    /// buggy API response must not be able to redirect Bearer/UID/storage
+    /// tokens to an arbitrary host.
+    static func validatedStorageURL(_ string: String) throws -> URL {
+        guard !string.isEmpty,
+              let comps = URLComponents(string: string),
+              let url = comps.url
+        else {
+            throw ProtonAPIError.transport(URLError(.badURL))
+        }
+        let host = (comps.host ?? "").lowercased()
+        guard comps.scheme?.lowercased() == "https",
+              comps.user == nil, comps.password == nil,
+              !host.isEmpty,
+              AppVersion.storageHostSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) })
+        else {
+            let shown = host.isEmpty ? "<none>" : host
+            throw ProtonAPIError.untrustedStorageHost("\(comps.scheme ?? "?")://\(shown)")
+        }
+        return url
+    }
 
     func request(
         _ path: String,
@@ -110,9 +164,7 @@ struct APIClient: Sendable {
         body: Data,
         boundary: String
     ) async throws {
-        guard let url = URL(string: bareURL) else {
-            throw ProtonAPIError.transport(URLError(.badURL))
-        }
+        let url = try Self.validatedStorageURL(bareURL)
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
@@ -122,9 +174,7 @@ struct APIClient: Sendable {
         req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         req.httpBody = body
         let (data, response) = try await data(for: req)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw ProtonAPIError.transport(URLError(.badServerResponse))
-        }
+        try Self.checkStorageResponse(response, data: data)
         let env = try JSONDecoder().decode(ProtonEnvelope.self, from: data)
         guard env.code == 1000 || env.code == 1001 else {
             throw ProtonAPIError.api(code: env.code, message: env.error ?? "storage upload failed")
@@ -145,9 +195,7 @@ struct APIClient: Sendable {
     ) async throws -> Data {
         let req = try blockDownloadRequest(bareURL: bareURL, token: token, uid: uid, accessToken: accessToken)
         let (data, response) = try await data(for: req)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw ProtonAPIError.transport(URLError(.badServerResponse))
-        }
+        try Self.checkStorageResponse(response, data: data)
         return data
     }
 
@@ -162,9 +210,7 @@ struct APIClient: Sendable {
     ) async throws -> Data {
         let req = try blockDownloadURLRequest(url: url, token: token, uid: uid, accessToken: accessToken)
         let (data, response) = try await data(for: req)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw ProtonAPIError.transport(URLError(.badServerResponse))
-        }
+        try Self.checkStorageResponse(response, data: data)
         return data
     }
 
@@ -183,10 +229,7 @@ struct APIClient: Sendable {
         // BareURL has no path suffix in the capture (token selects the
         // blob); the full Block URL embeds the same JWT in-path and also
         // resolves. Prefer BareURL + header (upload parity).
-        let target = bareURL.isEmpty ? nil : bareURL
-        guard let target, let url = URL(string: target) else {
-            throw ProtonAPIError.transport(URLError(.badURL))
-        }
+        let url = try Self.validatedStorageURL(bareURL)
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue(token, forHTTPHeaderField: "Pm-Storage-Token")
@@ -205,9 +248,7 @@ struct APIClient: Sendable {
         uid: String,
         accessToken: String
     ) throws -> URLRequest {
-        guard let reqURL = URL(string: url) else {
-            throw ProtonAPIError.transport(URLError(.badURL))
-        }
+        let reqURL = try Self.validatedStorageURL(url)
         var req = URLRequest(url: reqURL)
         req.httpMethod = "GET"
         if !token.isEmpty {
@@ -246,6 +287,12 @@ struct APIClient: Sendable {
             // verbatim in the UI AND persist in the queue JSON — a malformed
             // auth envelope must never echo AccessToken/RefreshToken.
             let body = redactedBodyPrefix(data)
+            if !(200..<300).contains(http.statusCode) {
+                // Keep the HTTP status (retry classification needs it).
+                let env = try? JSONDecoder().decode(ProtonEnvelope.self, from: data)
+                throw ProtonAPIError.http(status: http.statusCode, code: env?.code,
+                                          message: env?.error ?? "body=\(body)")
+            }
             if let env = try? JSONDecoder().decode(ProtonEnvelope.self, from: data) {
                 throw ProtonAPIError.api(code: env.code, message: "\(env.error ?? error.localizedDescription) body=\(body)")
             }
@@ -253,6 +300,22 @@ struct APIClient: Sendable {
                 DecodingError.Context(codingPath: [], debugDescription:
                     "\(error.localizedDescription) body=\(body)")))
         }
+    }
+
+    /// Storage-host status check: 2xx passes; 401 maps to `.unauthorized`
+    /// (so `SessionManager.withAuth` refreshes once); any other status is
+    /// surfaced as `.http` with the status preserved (plus the envelope
+    /// Code/Error when the storage host returned one).
+    static func checkStorageResponse(_ response: URLResponse, data: Data) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw ProtonAPIError.transport(URLError(.badServerResponse))
+        }
+        let status = http.statusCode
+        if (200..<300).contains(status) { return }
+        if status == 401 { throw ProtonAPIError.unauthorized }
+        let env = try? JSONDecoder().decode(ProtonEnvelope.self, from: data)
+        throw ProtonAPIError.http(status: status, code: env?.code,
+                                  message: env?.error ?? "storage HTTP \(status)")
     }
 
     /// First 600 bytes of a response body for decode-error diagnostics, with
@@ -272,6 +335,39 @@ struct APIClient: Sendable {
         } catch {
             throw ProtonAPIError.transport(error)
         }
+    }
+}
+
+/// Session delegate that allows an HTTP redirect only when it stays on the
+/// original request's host over https (same port). Anything else — another
+/// host, a downgrade to http, userinfo — is refused: URLSession then
+/// completes with the 3xx response itself, which callers surface as
+/// `.http(status:)`. Same-host is the strictest rule that covers both
+/// policies: API requests stay on the API host, and a storage request
+/// already passed `validatedStorageURL` for exactly that host.
+final class RedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
+    // Completion-handler form on purpose: the async overload's @objc thunk
+    // crashes swift-frontend 6.4 under the app target's concurrency settings.
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        let origin = task.originalRequest?.url
+        completionHandler(Self.allows(from: origin, to: request.url) ? request : nil)
+    }
+
+    static func allows(from origin: URL?, to target: URL?) -> Bool {
+        guard let origin, let target,
+              origin.scheme?.lowercased() == "https", target.scheme?.lowercased() == "https",
+              target.user == nil, target.password == nil,
+              let host = origin.host?.lowercased(), !host.isEmpty,
+              target.host?.lowercased() == host,
+              (origin.port ?? 443) == (target.port ?? 443)
+        else { return false }
+        return true
     }
 }
 

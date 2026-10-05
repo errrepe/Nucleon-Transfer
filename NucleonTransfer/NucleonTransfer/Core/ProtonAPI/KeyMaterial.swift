@@ -108,8 +108,10 @@ enum MailboxPassword {
         hasher: any BcryptHasher = ProtonBcryptHasher()
     ) throws -> Data {
         let encoded = DotSlashBase64.encode(keySalt)
-        let full = try hasher.hash(password: keyPass, dotSlashSalt: "$2y$10$\(encoded)")
+        var full = try hasher.hash(password: keyPass, dotSlashSalt: "$2y$10$\(encoded)")
+        defer { SecureBytes.wipe(&full) }
         guard full.count >= 31 else { throw ProtonAPIError.invalidBcryptSalt }
-        return full.suffix(31)
+        // Fresh storage for the result, so wiping `full` hits its own bytes.
+        return Data([UInt8](full.suffix(31)))
     }
 }

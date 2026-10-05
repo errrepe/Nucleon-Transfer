@@ -1,52 +1,51 @@
-// Nucleon Transfer — SED/SEIPDv1 decrypt + literal extraction (F3b-2).
-// Tag 9 (SED, no integrity) and tag 18 v1 (MDC SHA-1) share the CFB framing;
-// only tag 18 carries the trailing MDC packet (0xD3 0x14 + 20-byte digest).
+// Nucleon Transfer — SEIPDv1 decrypt + literal extraction (F3b-2, F8.1-S3).
+// Only tag 18 v1 (MDC SHA-1) is accepted. Tag 9 (SED, no integrity
+// protection) is rejected outright: decrypting it allows undetected
+// ciphertext tampering (EFAIL class); go-crypto rejects it by default too.
 import Foundation
 
 enum SEDError: Error, Sendable, Equatable {
     case badPacket
     case mdcMissing
     case mdcMismatch
+    /// Tag 9 (Symmetrically Encrypted Data without MDC) — refused.
+    case integrityProtectionRequired
     case unsupportedCompression(UInt8)
     case noLiteralData
 }
 
 enum SEDDecrypt {
-    /// Decrypts one SED body with the session key.
-    /// - `expectMDC` true for tag 18 (SEIPDv1): body starts with version
-    ///   octet 0x01 (RFC 9580; GnuPG 2.5 requires it — the live Token packet
-    ///   starts with 0x01), then CFB, then trailing MDC. False for tag 9
-    ///   (plain SED: CFB directly, no MDC).
+    /// Decrypts one SEIPDv1 (tag 18) body with the session key.
+    /// - `expectMDC` must be true (tag 18): body starts with version octet
+    ///   0x01 (RFC 9580; GnuPG 2.5 requires it — the live Token packet
+    ///   starts with 0x01), then NoResync CFB, then trailing MDC. False
+    ///   (tag 9, plain SED) throws `integrityProtectionRequired`.
     /// - MDC input (go-crypto parity) is the FULL plaintext prefix (18 bytes,
-    ///   incl. check) + data + D3 14 — NOT data-after-prefix alone.
+    ///   incl. check) + data + D3 14 — NOT data-after-prefix alone. The
+    ///   digest is compared in constant time.
     /// Returns the inner packet bytes (literal/compressed).
     static func decrypt(sedBody: Data, sessionKey: Data, symAlgoID: UInt8, expectMDC: Bool) throws -> Data {
+        guard expectMDC else { throw SEDError.integrityProtectionRequired }
         let keyLen = try PGPSymmetricAlgo.keyLength(id: symAlgoID)
         guard sessionKey.count == keyLen else { throw SEDError.badPacket }
-        var body = sedBody
-        if expectMDC {
-            guard let first = body.first, first == 1 else { throw SEDError.badPacket }
-            body = body.dropFirst()
-        }
-        let plain = try AESBlock.openPGPcfbDecrypt(ciphertext: body, key: sessionKey, resync: !expectMDC)
+        guard let first = sedBody.first, first == 1 else { throw SEDError.badPacket }
+        let body = sedBody.dropFirst()
+        let plain = try AESBlock.openPGPcfbDecrypt(ciphertext: body, key: sessionKey, resync: false)
         guard plain.count >= 18 else { throw SEDError.badPacket }
-        if expectMDC {
-            // MDC packet: D3 14 + SHA1 hash. The hash covers everything before
-            // it — full plaintext prefix + data + the D3 14 header itself
-            // (go-crypto hashes the stream including the header, then compares
-            // the trailing 20 bytes). Do NOT append D3 14: it is already the
-            // last 2 bytes of the hashed region.
-            guard plain.count >= 18 + 22,
-                  plain[plain.index(plain.endIndex, offsetBy: -22)] == 0xD3,
-                  plain[plain.index(plain.endIndex, offsetBy: -21)] == 0x14 else {
-                throw SEDError.mdcMissing
-            }
-            let hashed = plain.prefix(plain.count - 20)
-            let digest = try PGPHash.digest(id: 2, Data(hashed))
-            guard digest == plain.suffix(20) else { throw SEDError.mdcMismatch }
-            return Data(plain[plain.startIndex + 18 ..< plain.index(plain.endIndex, offsetBy: -22)])
+        // MDC packet: D3 14 + SHA1 hash. The hash covers everything before
+        // it — full plaintext prefix + data + the D3 14 header itself
+        // (go-crypto hashes the stream including the header, then compares
+        // the trailing 20 bytes). Do NOT append D3 14: it is already the
+        // last 2 bytes of the hashed region.
+        guard plain.count >= 18 + 22,
+              plain[plain.index(plain.endIndex, offsetBy: -22)] == 0xD3,
+              plain[plain.index(plain.endIndex, offsetBy: -21)] == 0x14 else {
+            throw SEDError.mdcMissing
         }
-        return Data(plain.dropFirst(18))
+        let hashed = plain.prefix(plain.count - 20)
+        let digest = try PGPHash.digest(id: 2, Data(hashed))
+        guard constantTimeEquals(digest, plain.suffix(20)) else { throw SEDError.mdcMismatch }
+        return Data(plain[plain.startIndex + 18 ..< plain.index(plain.endIndex, offsetBy: -22)])
     }
 
     /// Extracts literal data (tag 11) from inner packets.

@@ -139,7 +139,8 @@ enum SecretKeyUnlock {
               let spec = packet.s2kSpec,
               let iv = packet.iv else { throw SecretKeyError.truncated }
         let keyLen = try PGPSymmetricAlgo.keyLength(id: sym)
-        let (key, _) = try S2K.derive(spec: spec, passphrase: passphrase, keyLength: keyLen)
+        var (key, _) = try S2K.derive(spec: spec, passphrase: passphrase, keyLength: keyLen)
+        defer { SecureBytes.wipe(&key) }
         return try decryptWithIV(secretData: packet.secretData, iv: iv, key: key, usage: packet.s2kUsage)
     }
 

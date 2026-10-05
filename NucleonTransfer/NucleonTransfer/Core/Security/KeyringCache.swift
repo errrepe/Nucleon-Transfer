@@ -13,6 +13,10 @@ actor KeyringCache {
         var kdfHash: UInt8
         var kdfCipher: UInt8
         var curveOIDBody: Data
+        /// Email of the address owning this key (address keys only; set by
+        /// `unlockAddressKeys`). Selects signers for a claimed
+        /// SignatureEmail (SignatureVerification.signerPoints, F8.1-S2).
+        var email: String? = nil
 
         var candidate: DecryptCandidate? {
             guard algo == 18, fingerprint.count == 20 else { return nil }
@@ -58,21 +62,49 @@ actor KeyringCache {
     }
 
     /// Unlocks address keys: each address key's Token (passphrase encrypted to
-    /// a user ECDH subkey) is decrypted with the user candidates, then the
-    /// address secret key is unlocked with that passphrase (F3b-2).
+    /// a user ECDH subkey) is decrypted with the user candidates, its
+    /// detached Signature is verified against the user keys (F8.1-S2), then
+    /// the address secret key is unlocked with that passphrase (F3b-2). Each
+    /// unlocked key carries its address email. A key that fails any step is
+    /// skipped (never unlocked); only "no key at all" fails sign-in.
     @discardableResult
     func unlockAddressKeys(userKeys: [UnlockedKey]) async throws -> [UnlockedKey] {
         let addresses = try await fetchAddresses()
-        let candidates = userKeys.compactMap(\.candidate)
+        let out = Self.unlockAddressKeys(addresses: addresses, userKeys: userKeys)
+        guard !out.isEmpty else { throw ProtonAPIError.keyVerificationFailed }
+        for k in out { seeds[k.keyID] = k.seed }
+        return out
+    }
+
+    /// Pure per-key unlock behind `unlockAddressKeys`. go-proton-api
+    /// keyring.go `Keys.Unlock` parity: a key whose Token is missing, whose
+    /// Token signature is missing/invalid (fail-closed per key — such a key
+    /// is NEVER returned), or whose secret packet won't unlock is skipped
+    /// and the remaining keys still unlock, so one bad address cannot block
+    /// sign-in. Returns [] when nothing unlocked (caller throws).
+    static func unlockAddressKeys(
+        addresses: [ProtonAddress], userKeys: [UnlockedKey]
+    ) -> [UnlockedKey] {
         var out: [UnlockedKey] = []
         for addr in addresses {
             for ref in addr.keys where ref.isActive {
                 guard let tokenArmored = ref.token, !tokenArmored.isEmpty else { continue }
-                let passphrase = try MessageDecrypt.decrypt(armored: tokenArmored, candidates: candidates)
-                out.append(contentsOf: try unlockSecretKeys(armored: ref.privateKey, passphrase: Data(passphrase), idPrefix: "\(addr.id)/\(ref.id)"))
+                do {
+                    var passphrase = try DecryptChain.addressKeyPassphrase(
+                        token: tokenArmored, signature: ref.signature, userKeys: userKeys
+                    )
+                    defer { SecureBytes.wipe(&passphrase) }   // F8.1-S7, best-effort
+                    var keys = try DecryptChain.unlockSecretKeys(
+                        armored: ref.privateKey, passphrase: passphrase,
+                        idPrefix: "\(addr.id)/\(ref.id)"
+                    )
+                    for i in keys.indices { keys[i].email = addr.email }
+                    out.append(contentsOf: keys)
+                } catch {
+                    continue   // skip this key only (never logged: secret context)
+                }
             }
         }
-        guard !out.isEmpty else { throw ProtonAPIError.keyVerificationFailed }
         return out
     }
 
@@ -86,5 +118,13 @@ actor KeyringCache {
 
     func seed(for keyID: String) -> Data? { seeds[keyID] }
 
-    func lock() { seeds.removeAll() }
+    /// Drops every seed, zeroing each buffer first (best-effort: bytes still
+    /// shared with a live `UnlockedKey` elsewhere are left to ARC — see
+    /// SecureBytes). AppSession drops its `addressKeys` before calling this.
+    func lock() {
+        for keyID in Array(seeds.keys) {
+            SecureBytes.wipe(&seeds[keyID, default: Data()])
+        }
+        seeds.removeAll()
+    }
 }

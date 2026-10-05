@@ -50,13 +50,24 @@
    `ProtonSession{uid,accessToken,refreshToken}` só no `SessionManager` actor.
    Sem Keychain, sem disco — re-login a cada launch (como o app oficial).
 
-7. Refresh:
+7. Refresh (reativo, sem timer):
    POST /auth/v4/refresh { RefreshToken, UID }
-   → novos Access+Refresh (rotativo). Single-flight no SessionManager.
-   Agenda refresh em `expiresIn - 60s`.
+   → novos Access+Refresh (rotativo). Disparado só quando uma chamada
+   autenticada volta 401 (`SessionManager.withAuth`); não há refresh
+   agendado por `expiresIn`.
+   - Single-flight: um único `refreshTask` por vez. 401s concorrentes
+     aguardam o mesmo refresh em vez de reenviar o refresh token (que a
+     Proton rotaciona — reuso falha e pode revogar a sessão).
+   - Se o token que falhou já foi trocado por outro chamador, o retry usa o
+     token atual sem novo refresh.
+   - Epoch de sessão: login/signOut incrementam o `epoch` e cancelam o
+     refresh em voo; um refresh que termina sob outro epoch descarta o
+     resultado (`.unauthorized`), então nunca ressuscita sessão deslogada.
+   - Redirects: a `URLSession` só segue 3xx para o mesmo host https
+     (`RedirectGuard`); redirect para outro host é recusado e vira `.http(status: 3xx)`.
 
 8. Logout / revoke:
-   POST /auth/v4/logout. Limpa sessão + seeds da memória.
+   DELETE /auth/v4 (best-effort, depois de limpar a sessão local). Limpa sessão + seeds da memória (zeragem best-effort, ver §4).
 ```
 
 ## 2. SRP-6a detalhe
@@ -72,8 +83,8 @@
   vapor-community/bcrypt, ver `docs/VENDORED.md`). Semântica idêntica ao fork
   ProtonMail/bcrypt (primeiros 22 chars do salt, eco no output). Validado contra
   bcrypt de referência (Python): 3 vetores incluindo senha UTF-8.
-- Modulus PGP-clearsign: envelope parseado (`ModulusDecoder`); verificação da assinatura
-  GATADA para F2c (GopenPGP bridge). Transporte é TLS.
+- Modulus PGP-clearsign: assinatura verificada (`ModulusDecoder`, F8.1-S1) contra a pubkey
+  SRP da Proton fixada (copiada do go-srp `modulusPubkey`); módulo sem assinatura é rejeitado.
 - **Login real verificado em 2026-09-29** contra a conta de teste dedicada
   (registrada sob o nome antigo do app, `@proton.me`; endereço completo nos
   relatórios de QA no Desktop):
@@ -95,9 +106,16 @@
 
 - Como o app oficial: sessão (`ProtonSession{uid,accessToken,refreshToken}`,
   `SessionManager` actor) vive SÓ em memória e morre no logout/quit.
-  Re-login a cada launch; refresh single-flight mantém a sessão viva.
+  Re-login a cada launch; refresh single-flight (sob demanda, no 401)
+  mantém a sessão viva.
 - Nunca em Keychain, UserDefaults, SwiftData, plist, logs, crash reports.
-- Seeds destravadas idem: só em `KeyringCache` (memória), `lock()` limpa.
+- Seeds destravadas idem: só em `KeyringCache` (memória), `lock()` zera e limpa.
+- Zeragem é best-effort (`SecureBytes`, `memset_s`): o app zera os buffers
+  que possui (estado do bcrypt, hash da senha, senha salgada, passphrases
+  decifradas, seeds no `lock()`/`reset()`). A `String` do campo de senha,
+  cópias feitas pelo runtime, objetos de chave do CryptoKit e `Data` ainda
+  compartilhada (copy-on-write) não têm garantia de zeragem — só são
+  liberadas.
 
 ## 5. Erros comuns
 

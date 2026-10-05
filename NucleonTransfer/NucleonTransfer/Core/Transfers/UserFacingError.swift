@@ -36,7 +36,11 @@ enum UserFacingError: Sendable {
             case .invalidServerProof:
                 return "Server proof mismatch — possible downgrade attack. Aborted. Do not retry blindly; check your connection and sign in again."
             case .invalidModulusSignature:
-                return "Login setup data was invalid. Check your connection and retry once."
+                return "Proton's login parameters failed signature verification — the connection may be intercepted (proxy, VPN or antivirus TLS inspection). Try another network; do not retry blindly."
+            case let .unsupportedAuthVersion(v):
+                return "This account uses a legacy Proton password scheme (auth version \(v)) that is not supported. Change your password at account.proton.me to upgrade it, then sign in again."
+            case .secureRandomFailed:
+                return "The system random number generator failed. Retry; if it persists, restart your Mac."
             case .bcryptNotAvailable:
                 return "Crypto backend missing (bcrypt). Report this bug — do not retry."
             case .invalidBcryptSalt:
@@ -47,6 +51,12 @@ enum UserFacingError: Sendable {
                 return "Login setup failed (\(msg)). Check connection and retry once."
             case let .api(code, msg):
                 return message(forCode: code, message: msg)
+            case let .http(status, _, msg):
+                // HTTP status drives the guidance (429 / 5xx / 401 share the
+                // envelope-code wording).
+                return message(forCode: status, message: msg)
+            case let .untrustedStorageHost(host):
+                return "Proton returned a storage address on an unexpected host (\(host)). Nothing was sent. Retry; if it persists, report this bug."
             case let .transport(underlying):
                 return message(for: underlying)
             }
@@ -65,7 +75,22 @@ enum UserFacingError: Sendable {
                 return "Could not open the file key. The file may belong to another key or be corrupted — try again after re-login."
             case .missingRevision:
                 return "No file revision found. The file may have been deleted — reload the browser."
+            case .unsafeDestination:
+                return "Download blocked: a remote name would write outside the chosen folder. Ask the owner to rename the item."
+            case .manifestSignatureMissing:
+                return "Download stopped: this file's revision is not signed, so its author can't be verified. Nothing was saved."
+            case .manifestSignatureInvalid:
+                return "Download stopped: the file's signature could not be verified — its contents may have been altered. Nothing was saved."
+            case .manifestSignatureUnverifiable:
+                return "Download stopped: the file's author couldn't be verified — it is signed by an address outside your account. Nothing was saved."
+            case .contentKeySignatureInvalid:
+                return "Download stopped: the file key's signature is invalid — the file may have been tampered with. Nothing was saved."
+            case let .blockSignatureInvalid(index):
+                return "Download stopped: block \(index) failed signature verification — the file may have been tampered with. Nothing was saved."
             }
+        }
+        if let chain = error as? DecryptChainError {
+            return message(forChain: chain)
         }
         if let upload = error as? FileUploadError {
             return "Upload preparation failed (\(upload)). Re-add the file and retry."
@@ -134,6 +159,23 @@ enum UserFacingError: Sendable {
     }
 
     // MARK: - pieces
+
+    /// Key-level signature failures (F8.1-S2): the key material was refused,
+    /// never used. Actionable: reload; persistent → possible tampering.
+    private static func message(forChain error: DecryptChainError) -> String {
+        switch error {
+        case let .missingMaterial(what):
+            return "Proton returned incomplete key data (\(what)). Reload and retry; if it persists, report this bug."
+        case let .signatureMissing(what):
+            return "Refused to unlock: the \(what) is not signed. Reload and retry; if it persists, the item may have been tampered with."
+        case let .signatureInvalid(what):
+            return "Refused to unlock: the \(what) signature could not be verified. Reload and retry; if it persists, the item may have been tampered with."
+        case let .weakSignatureHash(what, algo):
+            return "Refused to unlock: the \(what) is signed with an obsolete hash (algorithm \(algo)). Report this item to Proton support."
+        case let .unknownSigner(what):
+            return "Can't verify the \(what): it was signed by an address outside this account. Shared items from other people aren't supported yet."
+        }
+    }
 
     static var rateLimited: String {
         "Too many recent logins (Proton 2028 rate-limit). Wait ~10 minutes before retrying — do not log in repeatedly. If you are signed in, keep using this session."

@@ -110,7 +110,7 @@ func fakeUnlocker(
             spy.recordNode(link.linkID, candidates)
             return [fakeKey(link.linkID)]
         },
-        folderHashKey: { link, _ in
+        folderHashKey: { link, _, _ in
             let seed = hashKeyFor?(link.linkID) ?? Data(repeating: 9, count: 32)
             guard !seed.isEmpty else {
                 throw TransferFailure.permanent("folder has no NodeHashKey")

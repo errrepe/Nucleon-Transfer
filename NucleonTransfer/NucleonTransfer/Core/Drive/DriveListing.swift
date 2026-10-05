@@ -43,7 +43,8 @@ actor DriveListing {
     /// adapter's folder-conflict probe (F7.1 R4). Feeding the fetched links
     /// into the resolver's cache lets a later nodeKeys/folder lookup on a
     /// child resolve without a getLink. Names decrypt with the PARENT
-    /// (location) keyring — a failure yields DriveItem's "Encrypted Item".
+    /// (location) keyring — a failure yields DriveItem's "Encrypted Item";
+    /// a name whose signature fails sets DriveItem.signatureIssue.
     /// Nonisolated async: the decrypt work runs on the CALLER's executor —
     /// both callers are actors, so CPU work never touches the main thread.
     static func decryptedChildren(
@@ -57,14 +58,18 @@ actor DriveListing {
         ).filter(\.isActive)
         await resolver.remember(links)
         let keys = try await resolver.nodeKeys(shareID: shareID, linkID: linkID)
-        let candidates = keys.compactMap(\.candidate)
+        let addressKeys = resolver.addressKeys
         return links.map { link in
-            DriveItem(
+            // F8.1-S2: the name's inline signature is checked; a failure
+            // flags the row (warning badge) instead of hiding it.
+            let decrypted = try? DecryptChain.decryptNameVerified(
+                link, parentKeys: keys, addressKeys: addressKeys
+            )
+            return DriveItem(
                 link: link,
                 shareID: shareID,
-                decryptedName: try? DecryptChain.decryptName(
-                    link, parentCandidates: candidates
-                )
+                decryptedName: decrypted?.name,
+                signatureIssue: decrypted.map { !$0.signature.isValid } ?? false
             )
         }
     }
