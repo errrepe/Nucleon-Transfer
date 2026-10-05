@@ -346,14 +346,17 @@ struct APIClient: Sendable {
 /// policies: API requests stay on the API host, and a storage request
 /// already passed `validatedStorageURL` for exactly that host.
 final class RedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
+    // Completion-handler form on purpose: the async overload's @objc thunk
+    // crashes swift-frontend 6.4 under the app target's concurrency settings.
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
         willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest
-    ) async -> URLRequest? {
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
         let origin = task.originalRequest?.url
-        return Self.allows(from: origin, to: request.url) ? request : nil
+        completionHandler(Self.allows(from: origin, to: request.url) ? request : nil)
     }
 
     static func allows(from origin: URL?, to target: URL?) -> Bool {
