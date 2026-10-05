@@ -1,0 +1,2927 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ (%@)" : {
+      "comment" : "Folder download row: name and file count",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ (%2$@)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (%2$@)"
+          }
+        }
+      }
+    },
+    "%@ (%lld)" : {
+      "comment" : "Transfers section header with row count: “Failed (3)”",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ (%2$lld)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (%2$lld)"
+          }
+        }
+      }
+    },
+    "%@ (Error %@)" : {
+      "comment" : "Proton’s own error sentence followed by its numeric error code",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ (Error %2$@)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (Erro %2$@)"
+          }
+        }
+      }
+    },
+    "%@ at %@" : {
+      "comment" : "Modified column: “Today at 14:32”",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ at %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ às %2$@"
+          }
+        }
+      }
+    },
+    "%@ left" : {
+      "comment" : "Transfer time remaining, e.g. “12 min left”",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ restantes"
+          }
+        }
+      }
+    },
+    "%@ of %@" : {
+      "comment" : "Transfer progress: bytes done of total",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ de %2$@"
+          }
+        }
+      }
+    },
+    "%@ of %@ used" : {
+      "comment" : "Storage footer: used of quota",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of %2$@ used"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ de %2$@ usados"
+          }
+        }
+      }
+    },
+    "%@ progress" : {
+      "comment" : "VoiceOver label of a transfer’s progress bar; argument is the file name",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Progresso de %@"
+          }
+        }
+      }
+    },
+    "%@ used" : {
+      "comment" : "Storage footer without a quota",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ usados"
+          }
+        }
+      }
+    },
+    "%@/s" : {
+      "comment" : "Transfer speed, e.g. “3.2 MB/s”",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@/s"
+          }
+        }
+      }
+    },
+    "%lld active" : {
+      "comment" : "Toolbar badge summary: number of in-flight transfers",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld active"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld active"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld em andamento"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld em andamento"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld failed" : {
+      "comment" : "Toolbar badge summary: number of failed transfers",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld com falha"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld com falha"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld of %lld selected" : {
+      "comment" : "Window subtitle: selected rows of all rows",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld selected"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$#@selected@"
+          },
+          "substitutions" : {
+            "selected" : {
+              "argNum" : 1,
+              "formatSpecifier" : "lld",
+              "variations" : {
+                "plural" : {
+                  "one" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg de %2$lld selecionado"
+                    }
+                  },
+                  "other" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg de %2$lld selecionados"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "123456" : {
+      "comment" : "Placeholder digits in the 6-digit authenticator code field",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "123456"
+          }
+        }
+      }
+    },
+    "A file named “%@” already exists here, so the folder can’t be created." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Já existe um arquivo chamado “%@” aqui, então a pasta não pode ser criada."
+          }
+        }
+      }
+    },
+    "A folder named “%@” already exists." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Já existe uma pasta chamada “%@”."
+          }
+        }
+      }
+    },
+    "A folder or file named “%@” already exists here." : {
+      "comment" : "New Folder sheet: inline duplicate-name error",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Já existe uma pasta ou arquivo chamado “%@” aqui."
+          }
+        }
+      }
+    },
+    "A network error occurred. Check your connection and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocorreu um erro de rede. Verifique sua conexão e tente novamente."
+          }
+        }
+      }
+    },
+    "About" : {
+      "comment" : "Settings tab",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sobre"
+          }
+        }
+      }
+    },
+    "About Nucleon Transfer" : {
+      "comment" : "App menu item",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sobre o Nucleon Transfer"
+          }
+        }
+      }
+    },
+    "Account" : {
+      "comment" : "Account name fallback in the sidebar footer",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conta"
+          }
+        }
+      }
+    },
+    "Account Options" : {
+      "comment" : "Sidebar footer menu button",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opções da Conta"
+          }
+        }
+      }
+    },
+    "Active" : {
+      "comment" : "Transfers section header: in-flight transfers",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Em Andamento"
+          }
+        }
+      }
+    },
+    "An item with this name already exists here. Rename it and try again. (Error 2500)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Já existe um item com este nome aqui. Renomeie-o e tente novamente. (Erro 2500)"
+          }
+        }
+      }
+    },
+    "Ask before moving to Trash" : {
+      "comment" : "Settings toggle",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perguntar antes de mover para o Lixo"
+          }
+        }
+      }
+    },
+    "Ask where to save every time" : {
+      "comment" : "Settings toggle",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perguntar onde salvar todas as vezes"
+          }
+        }
+      }
+    },
+    "Authentication code" : {
+      "comment" : "Two-factor code field label",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Código de autenticação"
+          }
+        }
+      }
+    },
+    "Back" : {
+      "comment" : "Navigation / two-factor screen button",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar"
+          }
+        }
+      }
+    },
+    "Cancel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelar"
+          }
+        }
+      }
+    },
+    "Cancel %@" : {
+      "comment" : "VoiceOver label of a transfer row’s cancel button; argument is the file name",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelar %@"
+          }
+        }
+      }
+    },
+    "Cancelled" : {
+      "comment" : "Transfer status: the transfer was cancelled",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelada"
+          }
+        }
+      }
+    },
+    "Cancelled." : {
+      "comment" : "Error message after an operation was cancelled",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelado."
+          }
+        }
+      }
+    },
+    "Choose" : {
+      "comment" : "Folder panel OK button (Settings › default download folder)",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolher"
+          }
+        }
+      }
+    },
+    "Choose the folder where downloads are saved." : {
+      "comment" : "Folder panel message",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolha a pasta onde os downloads são salvos."
+          }
+        }
+      }
+    },
+    "Choose where to save ^[%lld item](inflect: true)." : {
+      "comment" : "Download folder panel message with the number of items",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Choose where to save %lld item."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Choose where to save %lld items."
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Escolha onde salvar %lld item."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Escolha onde salvar %lld itens."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Choose where to save the download." : {
+      "comment" : "Download folder panel message",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolha onde salvar o download."
+          }
+        }
+      }
+    },
+    "Choose…" : {
+      "comment" : "Settings: choose the default download folder",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolher…"
+          }
+        }
+      }
+    },
+    "Clear Finished" : {
+      "comment" : "Transfers menu: remove finished transfers",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limpar Concluídas"
+          }
+        }
+      }
+    },
+    "Completed" : {
+      "comment" : "Transfers section header: finished transfers",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concluídas"
+          }
+        }
+      }
+    },
+    "Computer %lld" : {
+      "comment" : "Sidebar: a computer backup share, numbered",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Computador %lld"
+          }
+        }
+      }
+    },
+    "Computers" : {
+      "comment" : "Sidebar section header",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Computadores"
+          }
+        }
+      }
+    },
+    "Copy" : {
+      "comment" : "Error details alert: copy the message",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copiar"
+          }
+        }
+      }
+    },
+    "Couldn't Load Folder" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não Foi Possível Carregar a Pasta"
+          }
+        }
+      }
+    },
+    "Couldn't Load Your Drive" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não Foi Possível Carregar o Drive"
+          }
+        }
+      }
+    },
+    "Couldn't decrypt this item. Reload and try again; if it keeps happening, the item may be damaged." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível descriptografar este item. Recarregue e tente novamente; se continuar acontecendo, o item pode estar danificado."
+          }
+        }
+      }
+    },
+    "Couldn't find a free file name in the folder you chose. Choose another folder and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível encontrar um nome de arquivo livre na pasta escolhida. Escolha outra pasta e tente novamente."
+          }
+        }
+      }
+    },
+    "Couldn't open this item because it's signed with an outdated, insecure method. Contact Proton support about this item." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível abrir este item porque ele foi assinado com um método obsoleto e inseguro. Contate o suporte da Proton sobre este item."
+          }
+        }
+      }
+    },
+    "Couldn't open this item because its encryption data isn't signed. Reload and try again; if it keeps happening, the item may have been tampered with." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível abrir este item porque seus dados de criptografia não estão assinados. Recarregue e tente novamente; se continuar acontecendo, o item pode ter sido adulterado."
+          }
+        }
+      }
+    },
+    "Couldn't open this item because its signature couldn't be verified. Reload and try again; if it keeps happening, the item may have been tampered with." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível abrir este item porque a assinatura dele não pôde ser verificada. Recarregue e tente novamente; se continuar acontecendo, o item pode ter sido adulterado."
+          }
+        }
+      }
+    },
+    "Couldn't reach Proton. Check your internet connection and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível acessar a Proton. Verifique sua conexão com a internet e tente novamente."
+          }
+        }
+      }
+    },
+    "Couldn't read or write a file on your Mac. Check that it still exists and that there's enough space, then try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível ler ou gravar um arquivo no seu Mac. Verifique se ele ainda existe e se há espaço suficiente e tente novamente."
+          }
+        }
+      }
+    },
+    "Couldn't read this file on your Mac. Check that it still exists and that you can open it, then add it again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível ler este arquivo no seu Mac. Verifique se ele ainda existe e se você consegue abri-lo e adicione-o novamente."
+          }
+        }
+      }
+    },
+    "Couldn't read this folder on your Mac. Check that it still exists and that you can open it, then try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível ler esta pasta no seu Mac. Verifique se ela ainda existe e se você consegue abri-la e tente novamente."
+          }
+        }
+      }
+    },
+    "Couldn't refresh. Showing earlier results." : {
+      "comment" : "Banner above the folder table",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível atualizar. Mostrando resultados anteriores."
+          }
+        }
+      }
+    },
+    "Couldn't unlock this file. Sign out and back in, then try again; if it keeps happening, the file may be damaged." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível desbloquear este arquivo. Encerre a sessão, inicie-a novamente e tente de novo; se continuar acontecendo, o arquivo pode estar danificado."
+          }
+        }
+      }
+    },
+    "Couldn't unlock your account's encryption keys. Make sure your password is right and sign in again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível desbloquear as chaves de criptografia da sua conta. Confira se a senha está correta e inicie a sessão novamente."
+          }
+        }
+      }
+    },
+    "Couldn't verify Proton's server, so sign-in was stopped. Your connection may be intercepted — don't sign in on this network; try again on one you trust." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível verificar o servidor da Proton, então o início de sessão foi interrompido. Sua conexão pode estar sendo interceptada — não inicie sessão nesta rede; tente novamente em uma rede confiável."
+          }
+        }
+      }
+    },
+    "Couldn't verify Proton's server. Check your network (VPN or proxy) and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível verificar o servidor da Proton. Verifique sua rede (VPN ou proxy) e tente novamente."
+          }
+        }
+      }
+    },
+    "Couldn't verify the connection to Proton, so sign-in was stopped. Something on this network (a proxy, VPN or security software) may be intercepting it — don't sign in on this network; try again on one you trust." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível verificar a conexão com a Proton, então o início de sessão foi interrompido. Algo nesta rede (um proxy, VPN ou software de segurança) pode estar interceptando-a — não inicie sessão nesta rede; tente novamente em uma rede confiável."
+          }
+        }
+      }
+    },
+    "Couldn't verify this item because it was signed by someone outside your account. Items shared by other people aren't supported yet." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível verificar este item porque ele foi assinado por alguém de fora da sua conta. Itens compartilhados por outras pessoas ainda não são compatíveis."
+          }
+        }
+      }
+    },
+    "Couldn’t Download “%@”" : {
+      "comment" : "Error details alert title; argument is the file name",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não Foi Possível Baixar “%@”"
+          }
+        }
+      }
+    },
+    "Couldn’t Move to Trash" : {
+      "comment" : "Alert title",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não Foi Possível Mover para o Lixo"
+          }
+        }
+      }
+    },
+    "Couldn’t Upload “%@”" : {
+      "comment" : "Error details alert title; argument is the file name",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não Foi Possível Enviar “%@”"
+          }
+        }
+      }
+    },
+    "Couldn’t remember this folder. Choose another one." : {
+      "comment" : "Settings: default download folder error",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível memorizar esta pasta. Escolha outra."
+          }
+        }
+      }
+    },
+    "Create" : {
+      "comment" : "New Folder sheet button",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar"
+          }
+        }
+      }
+    },
+    "Create account" : {
+      "comment" : "Login screen link to Proton’s sign-up page",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar conta"
+          }
+        }
+      }
+    },
+    "Default folder" : {
+      "comment" : "Settings: default download folder row",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasta padrão"
+          }
+        }
+      }
+    },
+    "Demo Mode" : {
+      "comment" : "Debug-only badge: offline demo session",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modo de Demonstração"
+          }
+        }
+      }
+    },
+    "Dismiss" : {
+      "comment" : "Close button of a banner",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fechar"
+          }
+        }
+      }
+    },
+    "Document" : {
+      "comment" : "Kind column fallback for unknown file types",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Documento"
+          }
+        }
+      }
+    },
+    "Done" : {
+      "comment" : "Download state",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concluído"
+          }
+        }
+      }
+    },
+    "Download" : {
+      "comment" : "Toolbar button: download the selection",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixar"
+          }
+        }
+      }
+    },
+    "Download Here" : {
+      "comment" : "Download folder panel OK button",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixar Aqui"
+          }
+        }
+      }
+    },
+    "Download blocked: an item's name would save files outside the folder you chose. Rename the item, then try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Download bloqueado: o nome de um item salvaria arquivos fora da pasta escolhida. Renomeie o item e tente novamente."
+          }
+        }
+      }
+    },
+    "Download cancelled" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Download cancelado"
+          }
+        }
+      }
+    },
+    "Download cancelled (%@)" : {
+      "comment" : "Status after the download panel was dismissed; argument is the item name",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Download cancelado (%@)"
+          }
+        }
+      }
+    },
+    "Download failed" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha no download"
+          }
+        }
+      }
+    },
+    "Download stopped: part of the file failed a signature check, so it may have been tampered with. Nothing was saved." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Download interrompido: parte do arquivo falhou em uma verificação de assinatura, então ele pode ter sido adulterado. Nada foi salvo."
+          }
+        }
+      }
+    },
+    "Download stopped: the file's author couldn't be verified because it was signed by an address outside your account. Nothing was saved." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Download interrompido: o autor do arquivo não pôde ser verificado porque ele foi assinado por um endereço de fora da sua conta. Nada foi salvo."
+          }
+        }
+      }
+    },
+    "Download stopped: the file's key failed a signature check, so the file may have been tampered with. Nothing was saved." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Download interrompido: a chave do arquivo falhou em uma verificação de assinatura, então o arquivo pode ter sido adulterado. Nada foi salvo."
+          }
+        }
+      }
+    },
+    "Download stopped: the file's signature couldn't be verified, so it may have been altered. Nothing was saved." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Download interrompido: a assinatura do arquivo não pôde ser verificada, então ele pode ter sido alterado. Nada foi salvo."
+          }
+        }
+      }
+    },
+    "Download stopped: this file is not signed, so who uploaded it can't be verified. Nothing was saved." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Download interrompido: este arquivo não está assinado, então não é possível verificar quem o enviou. Nada foi salvo."
+          }
+        }
+      }
+    },
+    "Downloaded" : {
+      "comment" : "Download finished",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixado"
+          }
+        }
+      }
+    },
+    "Downloaded ^[%lld file](inflect: true)" : {
+      "comment" : "Folder download finished, with the number of files",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Downloaded %lld file"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Downloaded %lld files"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld arquivo baixado"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld arquivos baixados"
+                }
+              },
+              "zero" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld arquivos baixados"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Downloaded to %@" : {
+      "comment" : "Download finished; argument is the destination folder name",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixado em %@"
+          }
+        }
+      }
+    },
+    "Downloading" : {
+      "comment" : "Download state",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixando"
+          }
+        }
+      }
+    },
+    "Downloading folder…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixando pasta…"
+          }
+        }
+      }
+    },
+    "Downloading…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixando…"
+          }
+        }
+      }
+    },
+    "Downloading… %@" : {
+      "comment" : "Download progress; argument is a percentage like “42%”",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixando… %@"
+          }
+        }
+      }
+    },
+    "Downloads" : {
+      "comment" : "Settings section header",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Downloads"
+          }
+        }
+      }
+    },
+    "Downloads: %lld" : {
+      "comment" : "Settings stepper: simultaneous downloads",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Downloads: %lld"
+          }
+        }
+      }
+    },
+    "Download…" : {
+      "comment" : "Menu item: download the selection (opens a folder panel)",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixar…"
+          }
+        }
+      }
+    },
+    "Drive" : {
+      "comment" : "Sidebar section header (Proton Drive locations)",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drive"
+          }
+        }
+      }
+    },
+    "Drop files here or use Upload." : {
+      "comment" : "Empty folder description",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solte arquivos aqui ou use Enviar."
+          }
+        }
+      }
+    },
+    "Drop to upload to “%@”" : {
+      "comment" : "Drop overlay; argument is the folder name",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solte para enviar para “%@”"
+          }
+        }
+      }
+    },
+    "Email or username" : {
+      "comment" : "Login field",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "E-mail ou nome de usuário"
+          }
+        }
+      }
+    },
+    "Enclosing Folder" : {
+      "comment" : "Go menu item (⌘↑)",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasta Superior"
+          }
+        }
+      }
+    },
+    "Encrypted Item" : {
+      "comment" : "Name shown for an item whose name couldn’t be decrypted",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Item Criptografado"
+          }
+        }
+      }
+    },
+    "Enter a folder name." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Digite um nome para a pasta."
+          }
+        }
+      }
+    },
+    "Enter one of the recovery codes you saved when you turned on two-factor authentication. Each code works only once." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Digite um dos códigos de recuperação que você guardou ao ativar a autenticação de dois fatores. Cada código funciona apenas uma vez."
+          }
+        }
+      }
+    },
+    "Enter the 6-digit code from your authenticator app." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Digite o código de 6 dígitos do seu app autenticador."
+          }
+        }
+      }
+    },
+    "Enter the two-factor code from your authenticator app to continue." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Digite o código de dois fatores do seu app autenticador para continuar."
+          }
+        }
+      }
+    },
+    "Failed" : {
+      "comment" : "Transfers section header / transfer state",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Com Falha"
+          }
+        }
+      }
+    },
+    "Failed, %@" : {
+      "comment" : "VoiceOver value of a failed transfer row; argument is the error message",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha, %@"
+          }
+        }
+      }
+    },
+    "Files you upload or download appear here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os arquivos que você enviar ou baixar aparecem aqui."
+          }
+        }
+      }
+    },
+    "Filter this folder" : {
+      "comment" : "Search field prompt",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filtrar esta pasta"
+          }
+        }
+      }
+    },
+    "Folder" : {
+      "comment" : "Kind column: folder",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasta"
+          }
+        }
+      }
+    },
+    "Folder name" : {
+      "comment" : "New Folder sheet field",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome da pasta"
+          }
+        }
+      }
+    },
+    "Folder names can’t contain “/”." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nomes de pastas não podem conter “/”."
+          }
+        }
+      }
+    },
+    "Forgot password?" : {
+      "comment" : "Login screen link",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esqueceu a senha?"
+          }
+        }
+      }
+    },
+    "Forward" : {
+      "comment" : "Navigation button / Go menu item",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avançar"
+          }
+        }
+      }
+    },
+    "General" : {
+      "comment" : "Settings tab",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Geral"
+          }
+        }
+      }
+    },
+    "Go" : {
+      "comment" : "Menu bar menu",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ir"
+          }
+        }
+      }
+    },
+    "Hide Path Bar" : {
+      "comment" : "View menu item",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar Barra de Caminho"
+          }
+        }
+      }
+    },
+    "Kind" : {
+      "comment" : "Table column",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tipo"
+          }
+        }
+      }
+    },
+    "Known Limitations" : {
+      "comment" : "Help menu item",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limitações Conhecidas"
+          }
+        }
+      }
+    },
+    "Learn More" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saiba Mais"
+          }
+        }
+      }
+    },
+    "Loading your drive…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carregando o drive…"
+          }
+        }
+      }
+    },
+    "Loading…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carregando…"
+          }
+        }
+      }
+    },
+    "MIT License" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Licença MIT"
+          }
+        }
+      }
+    },
+    "Modified" : {
+      "comment" : "Table column",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data de Modificação"
+          }
+        }
+      }
+    },
+    "Move ^[%lld item](inflect: true) to Trash?" : {
+      "comment" : "Trash confirmation title with the number of items",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Move %lld item to Trash?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Move %lld items to Trash?"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Mover %lld item para o Lixo?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Mover %lld itens para o Lixo?"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Move to Trash" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover para o Lixo"
+          }
+        }
+      }
+    },
+    "My Files" : {
+      "comment" : "Sidebar: the user’s main Proton Drive volume",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meus Arquivos"
+          }
+        }
+      }
+    },
+    "Name" : {
+      "comment" : "Table column / New Folder field label",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome"
+          }
+        }
+      }
+    },
+    "Name couldn't be decrypted" : {
+      "comment" : "VoiceOver label of the lock badge",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível descriptografar o nome"
+          }
+        }
+      }
+    },
+    "New Folder" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nova Pasta"
+          }
+        }
+      }
+    },
+    "No Drive Locations" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhum Local no Drive"
+          }
+        }
+      }
+    },
+    "No Photos" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma Foto"
+          }
+        }
+      }
+    },
+    "No Transfers" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma Transferência"
+          }
+        }
+      }
+    },
+    "None" : {
+      "comment" : "Settings: no default download folder chosen",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma"
+          }
+        }
+      }
+    },
+    "Nucleon Transfer" : {
+      "comment" : "App name — do not translate",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nucleon Transfer"
+          }
+        }
+      }
+    },
+    "Nucleon Transfer Help" : {
+      "comment" : "Help menu item",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajuda do Nucleon Transfer"
+          }
+        }
+      }
+    },
+    "Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored." : {
+      "comment" : "About panel / Settings › About disclaimer",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Nucleon Transfer é um app independente e de código aberto. Ele não é afiliado nem endossado pela Proton AG. Sua senha é usada apenas para iniciar sessão e desbloquear suas chaves neste Mac — ela nunca é armazenada."
+          }
+        }
+      }
+    },
+    "OK" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        }
+      }
+    },
+    "Offline sample data — nothing is sent or stored." : {
+      "comment" : "Debug-only demo badge tooltip",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dados de exemplo offline — nada é enviado nem armazenado."
+          }
+        }
+      }
+    },
+    "Open" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir"
+          }
+        }
+      }
+    },
+    "Open Transfers when a transfer starts" : {
+      "comment" : "Settings toggle",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir Transferências quando uma transferência começar"
+          }
+        }
+      }
+    },
+    "Password" : {
+      "comment" : "Login field",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Senha"
+          }
+        }
+      }
+    },
+    "Path" : {
+      "comment" : "VoiceOver label of the path bar",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Caminho"
+          }
+        }
+      }
+    },
+    "Pause" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausar"
+          }
+        }
+      }
+    },
+    "Pause All" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausar Tudo"
+          }
+        }
+      }
+    },
+    "Paused" : {
+      "comment" : "Upload state",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausada"
+          }
+        }
+      }
+    },
+    "Photos" : {
+      "comment" : "Sidebar: the Proton Drive Photos volume",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fotos"
+          }
+        }
+      }
+    },
+    "Photos is read-only in Nucleon Transfer." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fotos é somente leitura no Nucleon Transfer."
+          }
+        }
+      }
+    },
+    "Photos you add in Proton Drive appear here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As fotos que você adicionar no Proton Drive aparecem aqui."
+          }
+        }
+      }
+    },
+    "Privacy & Security" : {
+      "comment" : "Help menu item",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privacidade e Segurança"
+          }
+        }
+      }
+    },
+    "Proton couldn't complete the request. Try again. (Error %@)" : {
+      "comment" : "Argument is a numeric error code",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Proton não conseguiu concluir a solicitação. Tente novamente. (Erro %@)"
+          }
+        }
+      }
+    },
+    "Proton couldn't complete the request. Try again; if it keeps happening, reload the folder. (Error %@)" : {
+      "comment" : "Argument is a numeric HTTP status",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Proton não conseguiu concluir a solicitação. Tente novamente; se continuar acontecendo, recarregue a pasta. (Erro %@)"
+          }
+        }
+      }
+    },
+    "Proton couldn't find or accept this item. Reload the folder and try again — if you were deleting it, it may already be gone. (Error 2501)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Proton não conseguiu encontrar ou aceitar este item. Recarregue a pasta e tente novamente — se você estava apagando o item, ele já pode ter sido removido. (Erro 2501)"
+          }
+        }
+      }
+    },
+    "Proton didn't accept the new folder's encryption data. Try again; if it keeps happening, report the problem. (Error 200501)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Proton não aceitou os dados de criptografia da nova pasta. Tente novamente; se continuar acontecendo, relate o problema. (Erro 200501)"
+          }
+        }
+      }
+    },
+    "Proton is asking for human verification. Sign in at drive.proton.me in your browser and complete the check, then try again here. (Error 9001)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Proton está pedindo uma verificação humana. Inicie sessão em drive.proton.me no navegador, conclua a verificação e tente novamente aqui. (Erro 9001)"
+          }
+        }
+      }
+    },
+    "Proton is busy right now. Transfers back off and retry on their own — leave the app open. (Error 429)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Proton está ocupada no momento. As transferências aguardam e tentam novamente sozinhas — deixe o app aberto. (Erro 429)"
+          }
+        }
+      }
+    },
+    "Proton sent a storage address this app doesn't trust, so nothing was sent. Try again; if it keeps happening, report the problem." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Proton enviou um endereço de armazenamento em que este app não confia, então nada foi enviado. Tente novamente; se continuar acontecendo, relate o problema."
+          }
+        }
+      }
+    },
+    "Proton sent download data this app couldn't read. Try again; if it keeps happening, report the problem." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Proton enviou dados de download que este app não conseguiu ler. Tente novamente; se continuar acontecendo, relate o problema."
+          }
+        }
+      }
+    },
+    "Proton sent incomplete encryption data for this item. Reload and try again; if it keeps happening, report the problem." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Proton enviou dados de criptografia incompletos para este item. Recarregue e tente novamente; se continuar acontecendo, relate o problema."
+          }
+        }
+      }
+    },
+    "Proton sent sign-in data that failed a safety check. Check your network (VPN or proxy) and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Proton enviou dados de início de sessão que falharam em uma verificação de segurança. Verifique sua rede (VPN ou proxy) e tente novamente."
+          }
+        }
+      }
+    },
+    "Proton sent sign-in data this app couldn't read. Try again; if it keeps happening, report the problem." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Proton enviou dados de início de sessão que este app não conseguiu ler. Tente novamente; se continuar acontecendo, relate o problema."
+          }
+        }
+      }
+    },
+    "Proton's servers are having trouble. Transfers retry on their own; otherwise try again in a few minutes. (Error %@)" : {
+      "comment" : "Argument is a numeric HTTP status",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os servidores da Proton estão com problemas. As transferências tentam novamente sozinhas; caso contrário, tente de novo em alguns minutos. (Erro %@)"
+          }
+        }
+      }
+    },
+    "Recovery code" : {
+      "comment" : "Two-factor field label",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Código de recuperação"
+          }
+        }
+      }
+    },
+    "Reload" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recarregar"
+          }
+        }
+      }
+    },
+    "Remove" : {
+      "comment" : "Remove a finished transfer from the list",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remover"
+          }
+        }
+      }
+    },
+    "Report an Issue…" : {
+      "comment" : "Help menu item",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Relatar um Problema…"
+          }
+        }
+      }
+    },
+    "Resume" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retomar"
+          }
+        }
+      }
+    },
+    "Retry" : {
+      "comment" : "Retry a failed transfer",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tentar Novamente"
+          }
+        }
+      }
+    },
+    "Retry Failed" : {
+      "comment" : "Transfers menu: retry every failed transfer",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tentar Novamente as com Falha"
+          }
+        }
+      }
+    },
+    "See folders you viewed next" : {
+      "comment" : "Forward button tooltip",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver as pastas visualizadas depois"
+          }
+        }
+      }
+    },
+    "See folders you viewed previously" : {
+      "comment" : "Back button tooltip",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver as pastas visualizadas antes"
+          }
+        }
+      }
+    },
+    "Select a Location" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecione um Local"
+          }
+        }
+      }
+    },
+    "Session not ready. Sign in again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A sessão não está pronta. Inicie a sessão novamente."
+          }
+        }
+      }
+    },
+    "Show Details…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar Detalhes…"
+          }
+        }
+      }
+    },
+    "Show Path Bar" : {
+      "comment" : "View menu item",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar Barra de Caminho"
+          }
+        }
+      }
+    },
+    "Show Transfers" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar Transferências"
+          }
+        }
+      }
+    },
+    "Show Transfers — %@" : {
+      "comment" : "Toolbar tooltip; argument is e.g. “3 active”",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar Transferências — %@"
+          }
+        }
+      }
+    },
+    "Show in Finder" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar no Finder"
+          }
+        }
+      }
+    },
+    "Sign In" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar Sessão"
+          }
+        }
+      }
+    },
+    "Sign Out" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encerrar Sessão"
+          }
+        }
+      }
+    },
+    "Sign Out…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encerrar Sessão…"
+          }
+        }
+      }
+    },
+    "Sign in with your Proton account" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicie a sessão com sua conta Proton"
+          }
+        }
+      }
+    },
+    "Sign out of %@?" : {
+      "comment" : "Confirmation title; argument is the account email",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encerrar a sessão de %@?"
+          }
+        }
+      }
+    },
+    "Sign out? Active transfers will be paused." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encerrar a sessão? As transferências em andamento serão pausadas."
+          }
+        }
+      }
+    },
+    "Sign-in couldn't start because part of the app is missing. Reinstall Nucleon Transfer, then try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível iniciar a sessão porque falta uma parte do app. Reinstale o Nucleon Transfer e tente novamente."
+          }
+        }
+      }
+    },
+    "Signing in…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciando sessão…"
+          }
+        }
+      }
+    },
+    "Simultaneous Transfers" : {
+      "comment" : "Settings section header",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transferências Simultâneas"
+          }
+        }
+      }
+    },
+    "Size" : {
+      "comment" : "Table column",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamanho"
+          }
+        }
+      }
+    },
+    "Something went wrong preparing the new folder. Try again; if it keeps happening, report the problem." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algo deu errado ao preparar a nova pasta. Tente novamente; se continuar acontecendo, relate o problema."
+          }
+        }
+      }
+    },
+    "Something went wrong preparing this file. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algo deu errado ao preparar este arquivo. Tente novamente."
+          }
+        }
+      }
+    },
+    "Something went wrong. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algo deu errado. Tente novamente."
+          }
+        }
+      }
+    },
+    "Source Code" : {
+      "comment" : "Settings › About link",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Código-Fonte"
+          }
+        }
+      }
+    },
+    "Storage" : {
+      "comment" : "VoiceOver label of the storage gauge",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Armazenamento"
+          }
+        }
+      }
+    },
+    "That code didn’t work. Check your authenticator app and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse código não funcionou. Verifique seu app autenticador e tente novamente."
+          }
+        }
+      }
+    },
+    "That name is too long. Try a shorter name." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse nome é muito longo. Tente um nome mais curto."
+          }
+        }
+      }
+    },
+    "That recovery code didn’t work. Check it and try again — each code works only once." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse código de recuperação não funcionou. Verifique-o e tente novamente — cada código funciona apenas uma vez."
+          }
+        }
+      }
+    },
+    "The download failed an integrity check, so nothing was saved. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O download falhou em uma verificação de integridade, então nada foi salvo. Tente novamente."
+          }
+        }
+      }
+    },
+    "The file or folder is no longer there. Check that it still exists, then try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O arquivo ou a pasta não está mais lá. Verifique se ainda existe e tente novamente."
+          }
+        }
+      }
+    },
+    "The original file is no longer on your Mac. Add it again to upload it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O arquivo original não está mais no seu Mac. Adicione-o novamente para enviá-lo."
+          }
+        }
+      }
+    },
+    "The signature of this item could not be verified." : {
+      "comment" : "Tooltip of the signature warning badge",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível verificar a assinatura deste item."
+          }
+        }
+      }
+    },
+    "There isn't enough space on your Mac. Free up some space, then try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não há espaço suficiente no seu Mac. Libere espaço e tente novamente."
+          }
+        }
+      }
+    },
+    "This Folder Is Empty" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta Pasta Está Vazia"
+          }
+        }
+      }
+    },
+    "This account has no browsable drives." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta conta não tem drives navegáveis."
+          }
+        }
+      }
+    },
+    "This account uses an older password format this app can't sign in with. Change your password at account.proton.me to update it, then sign in again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta conta usa um formato de senha antigo com o qual este app não consegue iniciar sessão. Altere sua senha em account.proton.me para atualizá-lo e inicie a sessão novamente."
+          }
+        }
+      }
+    },
+    "This app doesn't have permission to use that location. Choose another folder, then try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este app não tem permissão para usar esse local. Escolha outra pasta e tente novamente."
+          }
+        }
+      }
+    },
+    "This file changed while it was uploading. Try again once it's no longer being written." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este arquivo foi alterado durante o envio. Tente novamente quando ele não estiver mais sendo gravado."
+          }
+        }
+      }
+    },
+    "This file has nothing to download yet — it may still be uploading. Try again in a moment." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este arquivo ainda não tem nada para baixar — ele ainda pode estar sendo enviado. Tente novamente em instantes."
+          }
+        }
+      }
+    },
+    "This file is no longer available — it may have been deleted. Reload the folder." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este arquivo não está mais disponível — ele pode ter sido apagado. Recarregue a pasta."
+          }
+        }
+      }
+    },
+    "This happens on your Mac. It can take a few seconds." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isso acontece no seu Mac. Pode levar alguns segundos."
+          }
+        }
+      }
+    },
+    "This item is no longer available. Reload the folder and try again. (Error 404)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este item não está mais disponível. Recarregue a pasta e tente novamente. (Erro 404)"
+          }
+        }
+      }
+    },
+    "This location doesn't accept new items. Upload to a folder in My Files instead. (Error 2511)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este local não aceita novos itens. Envie para uma pasta em Meus Arquivos. (Erro 2511)"
+          }
+        }
+      }
+    },
+    "This name couldn't be decrypted with your current keys." : {
+      "comment" : "Tooltip of the lock badge",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível descriptografar este nome com suas chaves atuais."
+          }
+        }
+      }
+    },
+    "Too many recent sign-in attempts. Wait about 10 minutes before trying again — if you're already signed in, keep using this session. (Error 2028)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muitas tentativas recentes de início de sessão. Aguarde cerca de 10 minutos antes de tentar novamente — se você já iniciou a sessão, continue usando esta sessão. (Erro 2028)"
+          }
+        }
+      }
+    },
+    "Transfer Actions" : {
+      "comment" : "Transfers popover menu button",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ações de Transferência"
+          }
+        }
+      }
+    },
+    "Transfers" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transferências"
+          }
+        }
+      }
+    },
+    "Transfers, %@" : {
+      "comment" : "VoiceOver label of the toolbar button; argument is e.g. “3 active”",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transferências, %@"
+          }
+        }
+      }
+    },
+    "Try Again" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tentar Novamente"
+          }
+        }
+      }
+    },
+    "Two-Factor Authentication" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autenticação de Dois Fatores"
+          }
+        }
+      }
+    },
+    "Unlocking your encrypted drive…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desbloqueando seu drive criptografado…"
+          }
+        }
+      }
+    },
+    "Untitled Folder" : {
+      "comment" : "Default name of a new folder",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasta sem Título"
+          }
+        }
+      }
+    },
+    "Upload" : {
+      "comment" : "Upload panel OK button",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar"
+          }
+        }
+      }
+    },
+    "Upload Files…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar Arquivos…"
+          }
+        }
+      }
+    },
+    "Upload Folder…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar Pasta…"
+          }
+        }
+      }
+    },
+    "Upload failed" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha no envio"
+          }
+        }
+      }
+    },
+    "Upload files or a folder into this folder." : {
+      "comment" : "Upload button tooltip",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envie arquivos ou uma pasta para esta pasta."
+          }
+        }
+      }
+    },
+    "Upload not available yet (Error 2000)." : {
+      "comment" : "Failed upload row text",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envio ainda não disponível (Erro 2000)."
+          }
+        }
+      }
+    },
+    "Upload stopped." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envio interrompido."
+          }
+        }
+      }
+    },
+    "Uploaded" : {
+      "comment" : "Upload finished",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviado"
+          }
+        }
+      }
+    },
+    "Uploaded to %@" : {
+      "comment" : "Upload finished; argument is the destination folder",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviado para %@"
+          }
+        }
+      }
+    },
+    "Uploading to Photos isn't supported yet." : {
+      "comment" : "Upload button tooltip in Photos",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ainda não é possível enviar para Fotos."
+          }
+        }
+      }
+    },
+    "Uploads aren't available yet. Proton hasn't approved this app for uploads. Downloads work normally." : {
+      "comment" : "Banner + tooltip when Proton refuses uploads",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os envios ainda não estão disponíveis. A Proton ainda não aprovou este app para envios. Os downloads funcionam normalmente."
+          }
+        }
+      }
+    },
+    "Uploads: %lld" : {
+      "comment" : "Settings stepper: simultaneous uploads",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envios: %lld"
+          }
+        }
+      }
+    },
+    "Use a recovery code instead" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar um código de recuperação"
+          }
+        }
+      }
+    },
+    "Use authenticator code instead" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar o código do autenticador"
+          }
+        }
+      }
+    },
+    "Verify" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificar"
+          }
+        }
+      }
+    },
+    "Verifying code…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificando o código…"
+          }
+        }
+      }
+    },
+    "Verifying…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificando…"
+          }
+        }
+      }
+    },
+    "Version %@" : {
+      "comment" : "Settings › About; argument is “0.1.0 (4)”",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Versão %@"
+          }
+        }
+      }
+    },
+    "Waiting…" : {
+      "comment" : "Queued upload subtitle",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aguardando…"
+          }
+        }
+      }
+    },
+    "You can restore them from Trash in Proton Drive on the web." : {
+      "comment" : "Trash confirmation message",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você pode restaurá-los do Lixo no Proton Drive na web."
+          }
+        }
+      }
+    },
+    "You've been signed out. Sign in again to continue." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sua sessão foi encerrada. Inicie a sessão novamente para continuar."
+          }
+        }
+      }
+    },
+    "Your Mac couldn't generate the secure random data needed to sign in. Try again; if it keeps happening, restart your Mac." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seu Mac não conseguiu gerar os dados aleatórios seguros necessários para iniciar sessão. Tente novamente; se continuar acontecendo, reinicie o Mac."
+          }
+        }
+      }
+    },
+    "Your session expired. Sign in again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sua sessão expirou. Inicie a sessão novamente."
+          }
+        }
+      }
+    },
+    "^[%lld file](inflect: true)" : {
+      "comment" : "File count, e.g. in a folder download row",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld file"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld files"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld arquivo"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld arquivos"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "^[%lld item](inflect: true)" : {
+      "comment" : "Item count",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld item"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld items"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld item"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld itens"
+                }
+              },
+              "zero" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld itens"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "file" : {
+      "comment" : "VoiceOver: row kind, after the name",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "arquivo"
+          }
+        }
+      }
+    },
+    "folder" : {
+      "comment" : "VoiceOver: row kind, after the name",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pasta"
+          }
+        }
+      }
+    },
+    "name couldn't be decrypted" : {
+      "comment" : "VoiceOver: row status",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "não foi possível descriptografar o nome"
+          }
+        }
+      }
+    },
+    "signature could not be verified" : {
+      "comment" : "VoiceOver: row status",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "não foi possível verificar a assinatura"
+          }
+        }
+      }
+    },
+    "this account" : {
+      "comment" : "Sign-out confirmation fallback when no email is known",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "esta conta"
+          }
+        }
+      }
+    },
+    "to %@" : {
+      "comment" : "Upload subtitle fragment: destination folder",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "para %@"
+          }
+        }
+      }
+    },
+    "“%@” already exists but the conflicting item couldn’t be identified — reload the folder and retry." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” já existe, mas o item em conflito não pôde ser identificado — recarregue a pasta e tente novamente."
+          }
+        }
+      }
+    },
+    "“.” and “..” are reserved names." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“.” e “..” são nomes reservados."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

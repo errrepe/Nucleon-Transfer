@@ -43,6 +43,9 @@ alpha: expect rough edges and read the known limitations below.
   mirrors the remote tree, verifies SHA-256 per block, atomic writes.
 - **Settings**: default download folder, simultaneous uploads/downloads,
   open Transfers on start, ask before moving to Trash.
+- **Localized** in English and Brazilian Portuguese (pt-BR) via a String
+  Catalog (`Resources/Localizable.xcstrings`); the app follows the macOS
+  language setting.
 - All listing, decryption and transfers run off the main thread in actors.
 
 ## Requirements

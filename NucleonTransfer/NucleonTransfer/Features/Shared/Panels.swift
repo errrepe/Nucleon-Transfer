@@ -84,7 +84,7 @@ enum Panels {
             panel.canChooseDirectories = folders
             panel.allowsMultipleSelection = true
             panel.canCreateDirectories = false
-            panel.prompt = "Upload"
+            panel.prompt = String(localized: "Upload", comment: "Upload panel OK button")
             let completion: (NSApplication.ModalResponse) -> Void = { response in
                 cont.resume(returning: PanelIntake.uploadURLs(
                     responseOK: response == .OK, urls: panel.urls

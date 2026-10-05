@@ -132,7 +132,7 @@ struct TransferRow: View {
     }
 
     private func rowButton(
-        _ label: String, systemImage: String, action: @escaping () -> Void
+        _ label: LocalizedStringKey, systemImage: String, action: @escaping () -> Void
     ) -> some View {
         Button(label, systemImage: systemImage, action: action)
             .labelStyle(.iconOnly)

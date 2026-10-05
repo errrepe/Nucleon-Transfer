@@ -19,9 +19,9 @@ enum FolderOperationError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case let .duplicateName(name):
-            return "A folder named “\(name)” already exists."
+            return String(localized: "A folder named “\(name)” already exists.")
         case .sessionNotReady:
-            return "Session not ready. Sign in again."
+            return String(localized: "Session not ready. Sign in again.")
         }
     }
 }

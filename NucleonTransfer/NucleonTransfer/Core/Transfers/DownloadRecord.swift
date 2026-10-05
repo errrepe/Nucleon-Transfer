@@ -78,10 +78,10 @@ struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
 
     var stateLabel: String {
         switch state {
-        case .downloading: return "Downloading"
-        case .done: return "Done"
-        case .failed: return "Failed"
-        case .cancelled: return "Cancelled"
+        case .downloading: return String(localized: "Downloading")
+        case .done: return String(localized: "Done")
+        case .failed: return String(localized: "Failed")
+        case .cancelled: return String(localized: "Cancelled")
         }
     }
 
@@ -89,16 +89,17 @@ struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     var summary: String {
         switch state {
         case .downloading:
-            return kind == .folder ? "Downloading folder…" : "Downloading…"
+            return kind == .folder
+                ? String(localized: "Downloading folder…") : String(localized: "Downloading…")
         case .done:
-            if kind == .folder {
-                return "Downloaded \(fileCount) file(s)" + (destinationName.map { " → \($0)" } ?? "")
-            }
-            return "Downloaded" + (destinationName.map { " → \($0)" } ?? "")
+            let done = kind == .folder
+                ? String(AttributedString(localized: "Downloaded ^[\(fileCount) file](inflect: true)").characters)
+                : String(localized: "Downloaded")
+            return done + (destinationName.map { " → \($0)" } ?? "")
         case .failed:
-            return errorMessage ?? "Download failed"
+            return errorMessage ?? String(localized: "Download failed")
         case .cancelled:
-            return "Download cancelled"
+            return String(localized: "Download cancelled")
         }
     }
 

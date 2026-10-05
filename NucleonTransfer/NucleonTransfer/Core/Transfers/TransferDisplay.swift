@@ -92,7 +92,10 @@ struct TransferDisplaySection: Identifiable, Sendable, Equatable {
 
     var id: String { kind.rawValue }
     /// Header with the row count: "Failed (3)" (F8.4-U6).
-    var title: String { "\(kind.title) (\(items.count))" }
+    var title: String {
+        let count = items.count
+        return String(localized: "\(kind.title) (\(count))", comment: "Transfers section header with row count: “Failed (3)”")
+    }
 }
 
 enum TransferDisplay {
@@ -213,7 +216,7 @@ enum TransferDisplay {
     ) -> String {
         switch job.state {
         case .queued:
-            return "Waiting…"
+            return String(localized: "Waiting…", comment: "Queued upload subtitle")
         case .uploading:
             // F8.4-U6: "42% · 3.2 MB/s · 1 min left" once the rate has
             // warmed up; until then percent + byte counts + destination.
@@ -224,23 +227,23 @@ enum TransferDisplay {
                 )
             }
             var text = TransferRateText.percent(job.progress)
-                + " · \(bytes(job.bytesDone)) of \(bytes(job.bytesTotal))"
+                + " · " + ofBytes(job.bytesDone, job.bytesTotal)
             if let destination, !destination.isEmpty {
-                text += " · to \(destination)"
+                text += " · " + String(localized: "to \(destination)", comment: "Upload subtitle fragment: destination folder")
             }
             return text
         case .paused:
-            guard job.bytesTotal > 0 else { return "Paused" }
-            return "Paused · \(bytes(job.bytesDone)) of \(bytes(job.bytesTotal))"
+            guard job.bytesTotal > 0 else { return String(localized: "Paused") }
+            return String(localized: "Paused") + " · " + ofBytes(job.bytesDone, job.bytesTotal)
         case .done:
             if let destination, !destination.isEmpty {
-                return "Uploaded to \(destination)"
+                return String(localized: "Uploaded to \(destination)")
             }
-            return "Uploaded"
+            return String(localized: "Uploaded")
         case .failed:
             return UserFacingError.message(forJob: job)
         case .cancelled:
-            return "Cancelled"
+            return String(localized: "Cancelled")
         }
     }
 
@@ -259,8 +262,14 @@ enum TransferDisplay {
 
     private static func downloadName(_ record: DownloadRecord) -> String {
         guard record.kind == .folder, record.fileCount > 0 else { return record.name }
-        let noun = record.fileCount == 1 ? "file" : "files"
-        return "\(record.name) (\(record.fileCount) \(noun))"
+        // Plural via inflection (catalog plural variants in the app). The
+        // name stays out of the attributed string — Markdown in a file
+        // name must never be parsed.
+        let files = String(AttributedString(
+            localized: "^[\(record.fileCount) file](inflect: true)",
+            comment: "File count, e.g. in a folder download row"
+        ).characters)
+        return String(localized: "\(record.name) (\(files))", comment: "Folder download row: name and file count")
     }
 
     private static func downloadSubtitle(_ record: DownloadRecord, rate: Double?) -> String {
@@ -273,21 +282,30 @@ enum TransferDisplay {
                         total: record.bytesTotal, bytesPerSecond: rate
                     )
                 }
-                return "Downloading… \(TransferRateText.percent(progress))"
+                let percent = TransferRateText.percent(progress)
+                return String(localized: "Downloading… \(percent)")
             }
-            return record.kind == .folder ? "Downloading folder…" : "Downloading…"
+            return record.kind == .folder
+                ? String(localized: "Downloading folder…") : String(localized: "Downloading…")
         case .done:
             if let destination = record.destinationName, !destination.isEmpty {
-                return "Downloaded to \(destination)"
+                return String(localized: "Downloaded to \(destination)")
             }
-            return "Downloaded"
+            return String(localized: "Downloaded")
         case .failed:
             // Store already maps errors via UserFacingError.message(for:);
             // the message(forMessage:) pass upgrades any raw string too.
-            return UserFacingError.message(forMessage: record.errorMessage ?? "Download failed")
+            return UserFacingError.message(forMessage: record.errorMessage ?? String(localized: "Download failed"))
         case .cancelled:
-            return "Cancelled"
+            return String(localized: "Cancelled")
         }
+    }
+
+    /// "1.2 MB of 4 MB".
+    private static func ofBytes(_ done: Int64, _ total: Int64) -> String {
+        let doneText = bytes(done)
+        let totalText = bytes(total)
+        return String(localized: "\(doneText) of \(totalText)", comment: "Transfer progress: bytes done of total")
     }
 
     private static func bytes(_ n: Int64) -> String {

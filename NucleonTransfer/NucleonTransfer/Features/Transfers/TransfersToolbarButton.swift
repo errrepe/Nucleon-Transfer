@@ -36,10 +36,12 @@ struct TransfersToolbarButton: View {
         // what the button does; the active/failed count rides along. The
         // AX label keeps the shorter "Transfers" form.
         .help(
-            badgeState.summary.map { "Show Transfers — \($0)" } ?? "Show Transfers"
+            badgeState.summary.map { String(localized: "Show Transfers — \($0)") }
+                ?? String(localized: "Show Transfers")
         )
         .accessibilityLabel(
-            badgeState.summary.map { "Transfers, \($0)" } ?? "Transfers"
+            badgeState.summary.map { String(localized: "Transfers, \($0)") }
+                ?? String(localized: "Transfers")
         )
         .overlay(alignment: .topTrailing) { badge }
         .popover(isPresented: $activity.presentTransfers, arrowEdge: .bottom) {

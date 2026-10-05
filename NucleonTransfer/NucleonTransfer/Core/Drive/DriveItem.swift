@@ -38,7 +38,7 @@ extension DriveItem {
             id: link.linkID,
             shareID: shareID,
             parentLinkID: link.parentLinkID,
-            name: decryptedName ?? "Encrypted Item",
+            name: decryptedName ?? String(localized: "Encrypted Item", comment: "Name shown for an item whose name couldn’t be decrypted"),
             isNameDecrypted: decryptedName != nil,
             kind: link.isFolder ? .folder : .file,
             size: link.isFolder ? 0 : link.size,

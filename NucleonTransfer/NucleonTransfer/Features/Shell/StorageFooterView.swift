@@ -62,7 +62,7 @@ struct StorageFooterView: View {
         .confirmationDialog(
             hasActiveTransfers
                 ? "Sign out? Active transfers will be paused."
-                : "Sign out of \(session.account?.email ?? "this account")?",
+                : "Sign out of \(session.account?.email ?? String(localized: "this account"))?",
             isPresented: $showSignOutConfirm,
             titleVisibility: .visible
         ) {
@@ -82,7 +82,7 @@ struct StorageFooterView: View {
             Image(systemName: "person.crop.circle")
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
-                Text(session.account?.displayName ?? "Account")
+                Text(session.account?.displayName ?? String(localized: "Account"))
                     .font(.callout)
                     .lineLimit(1)
                 if let email = session.account?.email, !email.isEmpty {

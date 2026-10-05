@@ -26,7 +26,7 @@ enum UserFacingError: Sendable {
             case .needsHumanVerification:
                 return humanVerification
             case .cancelled:
-                return "Upload stopped."
+                return String(localized: "Upload stopped.")
             case let .transient(msg):
                 return message(forMessage: msg)
             case let .permanent(msg):
@@ -49,19 +49,19 @@ enum UserFacingError: Sendable {
             return name.message
         }
         if error is FileUploadError || isEncryptionError(error) {
-            return "Something went wrong preparing this file. Try again."
+            return String(localized: "Something went wrong preparing this file. Try again.")
         }
         if error is FolderCreateError {
-            return "Something went wrong preparing the new folder. Try again; if it keeps happening, report the problem."
+            return String(localized: "Something went wrong preparing the new folder. Try again; if it keeps happening, report the problem.")
         }
         if error is LocalTreeScanError {
-            return "Couldn't read this folder on your Mac. Check that it still exists and that you can open it, then try again."
+            return String(localized: "Couldn't read this folder on your Mac. Check that it still exists and that you can open it, then try again.")
         }
         if isDecryptionError(error) {
-            return "Couldn't decrypt this item. Reload and try again; if it keeps happening, the item may be damaged."
+            return String(localized: "Couldn't decrypt this item. Reload and try again; if it keeps happening, the item may be damaged.")
         }
         if error is CancellationError {
-            return "Cancelled."
+            return String(localized: "Cancelled.")
         }
         let ns = error as NSError
         if ns.domain == (NSURLErrorDomain as String) {
@@ -89,7 +89,7 @@ enum UserFacingError: Sendable {
         if job.errorCode == UploadBlockDetection.notAllowlistedCode {
             return uploadAllowlisted
         }
-        return message(forMessage: job.errorMessage ?? "Upload failed")
+        return message(forMessage: job.errorMessage ?? String(localized: "Upload failed"))
     }
 
     /// Mapping for already-stringified queue messages (TransferJob.errorMessage
@@ -118,9 +118,10 @@ enum UserFacingError: Sendable {
         if lower.contains("nodehashkey") || lower.contains("has no root link") {
             return incompleteItemData
         }
-        // 3. Already final: our own "(Error N)" suffix, or quoted names
-        //    (“…”) from FolderConflictPolicy / FolderNameError copy.
-        if text.range(of: #"\(Error -?\d+\)\.?$"#, options: .regularExpression) != nil
+        // 3. Already final: our own "(Error N)" suffix — in any language
+        //    ("(Erro N)" in pt-BR, F8.4-U9) — or quoted names (“…”) from
+        //    FolderConflictPolicy / FolderNameError copy.
+        if text.range(of: #"\(\p{L}+ -?\d+\)\.?$"#, options: .regularExpression) != nil
             || text.contains("“") || text.contains("\"")
         {
             return text
@@ -160,11 +161,11 @@ enum UserFacingError: Sendable {
     // MARK: - shared copy
 
     static var rateLimited: String {
-        "Too many recent sign-in attempts. Wait about 10 minutes before trying again — if you're already signed in, keep using this session. (Error 2028)"
+        String(localized: "Too many recent sign-in attempts. Wait about 10 minutes before trying again — if you're already signed in, keep using this session. (Error 2028)")
     }
 
     static var humanVerification: String {
-        "Proton is asking for human verification. Sign in at drive.proton.me in your browser and complete the check, then try again here. (Error 9001)"
+        String(localized: "Proton is asking for human verification. Sign in at drive.proton.me in your browser and complete the check, then try again here. (Error 9001)")
     }
 
     /// Proton's block-upload endpoint (`POST /drive/blocks`) enforces a
@@ -172,40 +173,40 @@ enum UserFacingError: Sendable {
     /// until this app is allowlisted. Short per-row text: the browser shows
     /// a banner with the explanation (F8.4-U1).
     static var uploadAllowlisted: String {
-        "Upload not available yet (Error 2000)."
+        String(localized: "Upload not available yet (Error 2000).")
     }
 
     /// Name-free: the row already shows which file it is.
     static var changedDuringUpload: String {
-        "This file changed while it was uploading. Try again once it's no longer being written."
+        String(localized: "This file changed while it was uploading. Try again once it's no longer being written.")
     }
 
     static var fileMissing: String {
-        "The original file is no longer on your Mac. Add it again to upload it."
+        String(localized: "The original file is no longer on your Mac. Add it again to upload it.")
     }
 
     static var fileUnreadable: String {
-        "Couldn't read this file on your Mac. Check that it still exists and that you can open it, then add it again."
+        String(localized: "Couldn't read this file on your Mac. Check that it still exists and that you can open it, then add it again.")
     }
 
     static var integrityFailed: String {
-        "The download failed an integrity check, so nothing was saved. Try again."
+        String(localized: "The download failed an integrity check, so nothing was saved. Try again.")
     }
 
     static var signedOut: String {
-        "You've been signed out. Sign in again to continue."
+        String(localized: "You've been signed out. Sign in again to continue.")
     }
 
     static var somethingWentWrong: String {
-        "Something went wrong. Try again."
+        String(localized: "Something went wrong. Try again.")
     }
 
     private static var incompleteItemData: String {
-        "Proton sent incomplete encryption data for this item. Reload and try again; if it keeps happening, report the problem."
+        String(localized: "Proton sent incomplete encryption data for this item. Reload and try again; if it keeps happening, report the problem.")
     }
 
     private static var unreadableServerData: String {
-        "Proton sent download data this app couldn't read. Try again; if it keeps happening, report the problem."
+        String(localized: "Proton sent download data this app couldn't read. Try again; if it keeps happening, report the problem.")
     }
 
     // MARK: - typed errors
@@ -217,27 +218,27 @@ enum UserFacingError: Sendable {
         case .humanVerificationRequired:
             return humanVerification
         case .needs2FA:
-            return "Enter the two-factor code from your authenticator app to continue."
+            return String(localized: "Enter the two-factor code from your authenticator app to continue.")
         case .unauthorized:
             return signedOut
         case .invalidServerProof:
             // Security-relevant: the server failed to prove it knows the
             // password verifier — treat as possible interception.
-            return "Couldn't verify Proton's server, so sign-in was stopped. Your connection may be intercepted — don't sign in on this network; try again on one you trust."
+            return String(localized: "Couldn't verify Proton's server, so sign-in was stopped. Your connection may be intercepted — don't sign in on this network; try again on one you trust.")
         case .invalidModulusSignature:
-            return "Couldn't verify the connection to Proton, so sign-in was stopped. Something on this network (a proxy, VPN or security software) may be intercepting it — don't sign in on this network; try again on one you trust."
+            return String(localized: "Couldn't verify the connection to Proton, so sign-in was stopped. Something on this network (a proxy, VPN or security software) may be intercepting it — don't sign in on this network; try again on one you trust.")
         case .unsupportedAuthVersion:
-            return "This account uses an older password format this app can't sign in with. Change your password at account.proton.me to update it, then sign in again."
+            return String(localized: "This account uses an older password format this app can't sign in with. Change your password at account.proton.me to update it, then sign in again.")
         case .secureRandomFailed:
-            return "Your Mac couldn't generate the secure random data needed to sign in. Try again; if it keeps happening, restart your Mac."
+            return String(localized: "Your Mac couldn't generate the secure random data needed to sign in. Try again; if it keeps happening, restart your Mac.")
         case .bcryptNotAvailable:
-            return "Sign-in couldn't start because part of the app is missing. Reinstall Nucleon Transfer, then try again."
+            return String(localized: "Sign-in couldn't start because part of the app is missing. Reinstall Nucleon Transfer, then try again.")
         case .invalidBcryptSalt:
-            return "Proton sent sign-in data this app couldn't read. Try again; if it keeps happening, report the problem."
+            return String(localized: "Proton sent sign-in data this app couldn't read. Try again; if it keeps happening, report the problem.")
         case .keyVerificationFailed:
-            return "Couldn't unlock your account's encryption keys. Make sure your password is right and sign in again."
+            return String(localized: "Couldn't unlock your account's encryption keys. Make sure your password is right and sign in again.")
         case .srpParamsOutOfBounds:
-            return "Proton sent sign-in data that failed a safety check. Check your network (VPN or proxy) and try again."
+            return String(localized: "Proton sent sign-in data that failed a safety check. Check your network (VPN or proxy) and try again.")
         case let .api(code, msg):
             return message(forCode: code, message: msg)
         case let .http(status, code, msg, _):
@@ -246,7 +247,7 @@ enum UserFacingError: Sendable {
             if let code, code != 1000 { return message(forCode: code, message: msg) }
             return message(forStatus: status)
         case .untrustedStorageHost:
-            return "Proton sent a storage address this app doesn't trust, so nothing was sent. Try again; if it keeps happening, report the problem."
+            return String(localized: "Proton sent a storage address this app doesn't trust, so nothing was sent. Try again; if it keeps happening, report the problem.")
         case let .transport(underlying):
             return message(for: underlying)
         }
@@ -259,25 +260,25 @@ enum UserFacingError: Sendable {
         case .badBlockHash, .blockIndexGap:
             return unreadableServerData
         case .emptyBlockList:
-            return "This file has nothing to download yet — it may still be uploading. Try again in a moment."
+            return String(localized: "This file has nothing to download yet — it may still be uploading. Try again in a moment.")
         case .missingContentKey:
-            return "Couldn't unlock this file. Sign out and back in, then try again; if it keeps happening, the file may be damaged."
+            return String(localized: "Couldn't unlock this file. Sign out and back in, then try again; if it keeps happening, the file may be damaged.")
         case .missingRevision:
-            return "This file is no longer available — it may have been deleted. Reload the folder."
+            return String(localized: "This file is no longer available — it may have been deleted. Reload the folder.")
         case .unsafeDestination:
-            return "Download blocked: an item's name would save files outside the folder you chose. Rename the item, then try again."
+            return String(localized: "Download blocked: an item's name would save files outside the folder you chose. Rename the item, then try again.")
         case .manifestSignatureMissing:
-            return "Download stopped: this file is not signed, so who uploaded it can't be verified. Nothing was saved."
+            return String(localized: "Download stopped: this file is not signed, so who uploaded it can't be verified. Nothing was saved.")
         case .manifestSignatureInvalid:
-            return "Download stopped: the file's signature couldn't be verified, so it may have been altered. Nothing was saved."
+            return String(localized: "Download stopped: the file's signature couldn't be verified, so it may have been altered. Nothing was saved.")
         case .manifestSignatureUnverifiable:
-            return "Download stopped: the file's author couldn't be verified because it was signed by an address outside your account. Nothing was saved."
+            return String(localized: "Download stopped: the file's author couldn't be verified because it was signed by an address outside your account. Nothing was saved.")
         case .contentKeySignatureInvalid:
-            return "Download stopped: the file's key failed a signature check, so the file may have been tampered with. Nothing was saved."
+            return String(localized: "Download stopped: the file's key failed a signature check, so the file may have been tampered with. Nothing was saved.")
         case .blockSignatureInvalid:
-            return "Download stopped: part of the file failed a signature check, so it may have been tampered with. Nothing was saved."
+            return String(localized: "Download stopped: part of the file failed a signature check, so it may have been tampered with. Nothing was saved.")
         case .destinationUnavailable:
-            return "Couldn't find a free file name in the folder you chose. Choose another folder and try again."
+            return String(localized: "Couldn't find a free file name in the folder you chose. Choose another folder and try again.")
         }
     }
 
@@ -288,13 +289,13 @@ enum UserFacingError: Sendable {
         case .missingMaterial:
             return incompleteItemData
         case .signatureMissing:
-            return "Couldn't open this item because its encryption data isn't signed. Reload and try again; if it keeps happening, the item may have been tampered with."
+            return String(localized: "Couldn't open this item because its encryption data isn't signed. Reload and try again; if it keeps happening, the item may have been tampered with.")
         case .signatureInvalid:
-            return "Couldn't open this item because its signature couldn't be verified. Reload and try again; if it keeps happening, the item may have been tampered with."
+            return String(localized: "Couldn't open this item because its signature couldn't be verified. Reload and try again; if it keeps happening, the item may have been tampered with.")
         case .weakSignatureHash:
-            return "Couldn't open this item because it's signed with an outdated, insecure method. Contact Proton support about this item."
+            return String(localized: "Couldn't open this item because it's signed with an outdated, insecure method. Contact Proton support about this item.")
         case .unknownSigner:
-            return "Couldn't verify this item because it was signed by someone outside your account. Items shared by other people aren't supported yet."
+            return String(localized: "Couldn't verify this item because it was signed by someone outside your account. Items shared by other people aren't supported yet.")
         }
     }
 
@@ -307,25 +308,27 @@ enum UserFacingError: Sendable {
         case 2000: return uploadAllowlisted
         case 401, 429, 500...599: return message(forStatus: code)
         case 2500:
-            return "An item with this name already exists here. Rename it and try again. (Error 2500)"
+            return String(localized: "An item with this name already exists here. Rename it and try again. (Error 2500)")
         case 2501:
             // Reused server-side: folder-creation signature rejects AND
             // "Draft file not found" on trash/delete (live-proven F6).
-            return "Proton couldn't find or accept this item. Reload the folder and try again — if you were deleting it, it may already be gone. (Error 2501)"
+            return String(localized: "Proton couldn't find or accept this item. Reload the folder and try again — if you were deleting it, it may already be gone. (Error 2501)")
         case 2511:
-            return "This location doesn't accept new items. Upload to a folder in My Files instead. (Error 2511)"
+            return String(localized: "This location doesn't accept new items. Upload to a folder in My Files instead. (Error 2511)")
         case 200501:
-            return "Proton didn't accept the new folder's encryption data. Try again; if it keeps happening, report the problem. (Error 200501)"
+            return String(localized: "Proton didn't accept the new folder's encryption data. Try again; if it keeps happening, report the problem. (Error 200501)")
         default:
+            // Codes interpolate as String: an Int argument would be
+            // locale-grouped ("8.002" in pt-BR).
             // Proton's envelope `Error` text is written for end users
             // ("Incorrect login credentials. Please try again.").
             let detail = msg.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !detail.isEmpty else {
-                return "Proton couldn't complete the request. Try again. (Error \(code))"
+                return String(localized: "Proton couldn't complete the request. Try again. (Error \(String(code)))")
             }
             let sentence = detail.hasSuffix(".") || detail.hasSuffix("!") || detail.hasSuffix("?")
                 ? detail : detail + "."
-            return "\(sentence) (Error \(code))"
+            return String(localized: "\(sentence) (Error \(String(code)))")
         }
     }
 
@@ -335,13 +338,13 @@ enum UserFacingError: Sendable {
         case 401:
             return signedOut
         case 429:
-            return "Proton is busy right now. Transfers back off and retry on their own — leave the app open. (Error 429)"
+            return String(localized: "Proton is busy right now. Transfers back off and retry on their own — leave the app open. (Error 429)")
         case 500...599:
-            return "Proton's servers are having trouble. Transfers retry on their own; otherwise try again in a few minutes. (Error \(status))"
+            return String(localized: "Proton's servers are having trouble. Transfers retry on their own; otherwise try again in a few minutes. (Error \(String(status)))")
         case 404:
-            return "This item is no longer available. Reload the folder and try again. (Error 404)"
+            return String(localized: "This item is no longer available. Reload the folder and try again. (Error 404)")
         default:
-            return "Proton couldn't complete the request. Try again; if it keeps happening, reload the folder. (Error \(status))"
+            return String(localized: "Proton couldn't complete the request. Try again; if it keeps happening, reload the folder. (Error \(String(status)))")
         }
     }
 
@@ -352,16 +355,16 @@ enum UserFacingError: Sendable {
              NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed,
              NSURLErrorResourceUnavailable, NSURLErrorInternationalRoamingOff,
              NSURLErrorCallIsActive, NSURLErrorDataNotAllowed:
-            return "Couldn't reach Proton. Check your internet connection and try again."
+            return String(localized: "Couldn't reach Proton. Check your internet connection and try again.")
         case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateHasBadDate,
              NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasUnknownRoot,
              NSURLErrorServerCertificateNotYetValid, NSURLErrorClientCertificateRejected,
              NSURLErrorClientCertificateRequired:
-            return "Couldn't verify Proton's server. Check your network (VPN or proxy) and try again."
+            return String(localized: "Couldn't verify Proton's server. Check your network (VPN or proxy) and try again.")
         case NSURLErrorCancelled:
-            return "Cancelled."
+            return String(localized: "Cancelled.")
         default:
-            return "A network error occurred. Check your connection and try again."
+            return String(localized: "A network error occurred. Check your connection and try again.")
         }
     }
 
@@ -371,18 +374,18 @@ enum UserFacingError: Sendable {
         if ns.domain == NSCocoaErrorDomain {
             switch ns.code {
             case NSFileWriteOutOfSpaceError:
-                return "There isn't enough space on your Mac. Free up some space, then try again."
+                return String(localized: "There isn't enough space on your Mac. Free up some space, then try again.")
             case NSFileReadNoPermissionError, NSFileWriteNoPermissionError:
-                return "This app doesn't have permission to use that location. Choose another folder, then try again."
+                return String(localized: "This app doesn't have permission to use that location. Choose another folder, then try again.")
             case NSFileNoSuchFileError, NSFileReadNoSuchFileError:
-                return "The file or folder is no longer there. Check that it still exists, then try again."
+                return String(localized: "The file or folder is no longer there. Check that it still exists, then try again.")
             default:
                 break
             }
         } else if ns.code == Int(ENOSPC) {
-            return "There isn't enough space on your Mac. Free up some space, then try again."
+            return String(localized: "There isn't enough space on your Mac. Free up some space, then try again.")
         }
-        return "Couldn't read or write a file on your Mac. Check that it still exists and that there's enough space, then try again."
+        return String(localized: "Couldn't read or write a file on your Mac. Check that it still exists and that there's enough space, then try again.")
     }
 
     // MARK: - helpers

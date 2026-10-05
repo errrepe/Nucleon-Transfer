@@ -30,6 +30,6 @@ enum PanelIntake {
 
     /// Status line for a dismissed download panel (never blocks, never proceeds).
     static func downloadCancelledStatus(rowName: String) -> String {
-        "Download cancelled (\(rowName))"
+        String(localized: "Download cancelled (\(rowName))")
     }
 }

@@ -43,15 +43,13 @@ enum FolderConflictPolicy {
                 return .reuse(linkID: child.id)
             }
             return .fail(
-                message: "A file named “\(name)” already exists here, "
-                    + "so the folder can’t be created."
+                message: String(localized: "A file named “\(name)” already exists here, so the folder can’t be created.")
             )
         }
         // The server reported a duplicate but the listing shows no matching
         // name (decrypt failure, or a trashed/draft node holding the hash).
         return .fail(
-            message: "“\(name)” already exists but the conflicting item "
-                + "couldn’t be identified — reload the folder and retry."
+            message: String(localized: "“\(name)” already exists but the conflicting item couldn’t be identified — reload the folder and retry.")
         )
     }
 }

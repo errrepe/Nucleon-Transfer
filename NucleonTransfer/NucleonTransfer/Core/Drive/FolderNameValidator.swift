@@ -19,17 +19,17 @@ enum FolderNameError: Error, Equatable, Sendable {
     var message: String {
         switch self {
         case .empty:
-            return "Enter a folder name."
+            return String(localized: "Enter a folder name.")
         case .invalidCharacters:
-            return "Folder names can’t contain “/”."
+            return String(localized: "Folder names can’t contain “/”.")
         case .reserved:
-            return "“.” and “..” are reserved names."
+            return String(localized: "“.” and “..” are reserved names.")
         case .tooLong:
             // M6: the limit is 255 UTF-8 BYTES — a char count would be a
             // lie for accented names/emoji, so the copy stays unit-free.
-            return "That name is too long. Try a shorter name."
+            return String(localized: "That name is too long. Try a shorter name.")
         case .alreadyExists(let name):
-            return "A folder or file named “\(name)” already exists here."
+            return String(localized: "A folder or file named “\(name)” already exists here.")
         }
     }
 }

@@ -14,7 +14,10 @@ import SwiftUI
 /// About-panel copy (spec 6.6) — shared by the App menu's About command
 /// (shown in the standard panel's credits) and the Settings › About tab.
 enum AboutContent {
-    static let disclaimer = "Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored."
+    static let disclaimer = String(
+        localized: "Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored.",
+        comment: "About panel / Settings › About disclaimer"
+    )
     static let sourceCodeURL = URL(string: "https://github.com/errrepe/Nucleon-Transfer")
 }
 

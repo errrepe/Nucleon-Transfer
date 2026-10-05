@@ -28,7 +28,7 @@ struct NewFolderSheet: View {
     @FocusState private var nameFocused: Bool
 
     init(
-        initialName: String = "Untitled Folder",
+        initialName: String = String(localized: "Untitled Folder", comment: "Default name of a new folder"),
         existingNames: Set<String> = [],
         initialError: String? = nil,
         initiallyEdited: Bool = false,

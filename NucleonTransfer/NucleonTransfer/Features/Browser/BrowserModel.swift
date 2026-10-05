@@ -213,7 +213,7 @@ final class BrowserModel {
         store.phase = .loading
         store.isStale = false
         guard let listing = session.listing else {
-            store.phase = .failed("Session not ready. Sign in again.")
+            store.phase = .failed(String(localized: "Session not ready. Sign in again."))
             return
         }
         do {
@@ -230,7 +230,7 @@ final class BrowserModel {
             // Only the session that produced this listing may be signed
             // out — a late 401 from an old session must not end a new one.
             guard session.listing === listing else { return }
-            await session.signOut(reason: "Your session expired. Sign in again.")
+            await session.signOut(reason: String(localized: "Your session expired. Sign in again."))
         } catch {
             guard session.listing === listing,
                   loadGate.isCurrent(token, folder: loc.linkID)

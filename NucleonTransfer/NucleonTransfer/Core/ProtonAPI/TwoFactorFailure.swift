@@ -36,9 +36,9 @@ enum TwoFactorFailure: Sendable {
         if isRejectedCode(error) {
             switch mode {
             case .authenticator:
-                return "That code didn’t work. Check your authenticator app and try again."
+                return String(localized: "That code didn’t work. Check your authenticator app and try again.")
             case .recoveryCode:
-                return "That recovery code didn’t work. Check it and try again — each code works only once."
+                return String(localized: "That recovery code didn’t work. Check it and try again — each code works only once.")
             }
         }
         return UserFacingError.message(for: error)

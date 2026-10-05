@@ -52,10 +52,10 @@ enum DownloadFolderPreference {
         switch itemCount {
         case nil, 0?:
             String(localized: "Choose where to save the download.")
-        case 1?:
-            String(localized: "Choose where to save 1 item.")
         case let count?:
-            String(localized: "Choose where to save \(count) items.")
+            // Plural via inflection (catalog plural variants in the app;
+            // English inflection where no catalog is bundled — swift test).
+            String(AttributedString(localized: "Choose where to save ^[\(count) item](inflect: true).").characters)
         }
     }
 }

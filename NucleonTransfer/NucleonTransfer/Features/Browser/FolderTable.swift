@@ -177,9 +177,18 @@ struct FolderTable: View {
     /// "report.pdf, file" — plus the decryption caveat when the lock
     /// badge shows (the visible name is the "Encrypted Item" placeholder).
     private static func nameAccessibilityLabel(for item: DriveItem) -> String {
-        var label = "\(item.name), \(item.isFolder ? "folder" : "file")"
-        if !item.isNameDecrypted { label += ", name couldn't be decrypted" }
-        if item.signatureIssue { label += ", signature could not be verified" }
-        return label
+        var parts = [
+            item.name,
+            item.isFolder
+                ? String(localized: "folder", comment: "VoiceOver: row kind, after the name")
+                : String(localized: "file", comment: "VoiceOver: row kind, after the name"),
+        ]
+        if !item.isNameDecrypted {
+            parts.append(String(localized: "name couldn't be decrypted", comment: "VoiceOver: row status"))
+        }
+        if item.signatureIssue {
+            parts.append(String(localized: "signature could not be verified", comment: "VoiceOver: row status"))
+        }
+        return parts.joined(separator: ", ")
     }
 }
