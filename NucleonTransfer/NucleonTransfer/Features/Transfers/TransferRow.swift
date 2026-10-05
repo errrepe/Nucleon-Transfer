@@ -10,7 +10,9 @@
 // element (name + status) whose buttons are exposed as named actions.
 // Polish pass: the progress bar glides between snapshots and Pause/Resume
 // is one button whose symbol morphs (replace effect) instead of swapping
-// controls.
+// controls. Pass 3: done rows carry a checkmark, drawn on (drawOn) when
+// the transfer has just finished — older rows show it as is, so opening
+// the popover doesn't redraw every finished row.
 import AppKit
 import SwiftUI
 
@@ -32,6 +34,10 @@ struct TransferRow: View {
     var actions = TransferRowActions()
     @State private var showDetails = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Set on appear for a just-finished row — inserts the checkmark so
+    /// its drawOn transition plays. (Finishing moves the row to another
+    /// section, so it is a NEW view: a value-driven effect can't fire.)
+    @State private var checkDrawn = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -47,10 +53,8 @@ struct TransferRow: View {
                     .truncationMode(.middle)
                     .help(item.name)
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    if let symbol = item.statusSymbol {
-                        Image(systemName: symbol)
-                            .imageScale(.small)
-                            .transition(.symbolEffect(.appear))
+                    if let symbol = item.statusSymbol, !awaitsCheckDraw {
+                        statusGlyph(symbol)
                     }
                     Text(item.subtitle)
                         .lineLimit(2)
@@ -76,6 +80,12 @@ struct TransferRow: View {
             actionButtons
         }
         .padding(.vertical, 2)
+        .onAppear {
+            guard awaitsCheckDraw else { return }
+            withAnimation(Motion.adaptive(.smooth(duration: 0.5), reduceMotion: reduceMotion)) {
+                checkDrawn = true
+            }
+        }
         .contextMenu { contextActions }
         // One VoiceOver stop per row: name + status/progress, buttons as
         // named actions (rotor "Actions") instead of separate stops.
@@ -88,6 +98,26 @@ struct TransferRow: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(item.subtitle)
+        }
+    }
+
+    /// A row that finished in the last couple of seconds and hasn't drawn
+    /// its checkmark yet.
+    private var awaitsCheckDraw: Bool {
+        item.isDone && !checkDrawn && Date().timeIntervalSince(item.updatedAt) < 2
+    }
+
+    /// The end-state glyph with its insertion transition: drawn on for a
+    /// checkmark, the symbol "appear" otherwise, a fade under Reduce Motion.
+    @ViewBuilder
+    private func statusGlyph(_ symbol: String) -> some View {
+        let image = Image(systemName: symbol).imageScale(.small)
+        if reduceMotion {
+            image.transition(.opacity)
+        } else if item.isDone {
+            image.transition(.symbolEffect(.drawOn))
+        } else {
+            image.transition(.symbolEffect(.appear))
         }
     }
 
