@@ -21,6 +21,7 @@ struct AccountSettingsView: View {
     @State private var isApplying = false
     /// Shown under the buttons after "Forget This Mac" ran.
     @State private var forgotten = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(biometryAvailable: Bool? = nil) {
         _biometryAvailable = State(initialValue: biometryAvailable ?? BiometryAvailability.isAvailable())
@@ -58,11 +59,14 @@ struct AccountSettingsView: View {
                     .disabled(isBusy)
                 }
                 if forgotten {
+                    // Opacity only — the Settings window resizes to fit.
                     Label("The saved sign-in was removed from this Mac.", systemImage: "checkmark.circle")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .transition(.opacity)
                 }
             }
+            .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: forgotten)
         }
         .settingsFormLayout()
         .confirmationDialog(

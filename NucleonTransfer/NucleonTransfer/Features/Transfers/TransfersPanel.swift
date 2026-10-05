@@ -8,7 +8,8 @@
 // once-a-second tick while anything is in flight, so speed/ETA refresh
 // (and fade out when a transfer stalls) between progress snapshots.
 // Polish pass: rows animate as they move between sections or leave
-// ("Clear Finished"), and the empty state crossfades with the list.
+// ("Clear Finished"), the empty state crossfades with the list, section
+// counts roll and the intake-error footer fades in.
 import SwiftUI
 
 struct TransfersPanel: View {
@@ -75,17 +76,21 @@ struct TransfersPanel: View {
             Divider()
             content
             if let lastError, !lastError.isEmpty {
-                Divider()
-                Text(lastError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-                    .help(lastError)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                VStack(spacing: 0) {
+                    Divider()
+                    Text(lastError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                        .help(lastError)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                }
+                .transition(.opacity)
             }
         }
+        .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: lastError)
         .frame(width: 380, height: 440, alignment: .top)
     }
 
@@ -152,10 +157,17 @@ struct TransfersPanel: View {
         } else {
             List {
                 ForEach(sections) { section in
-                    Section(section.title) {
+                    Section {
                         ForEach(section.items) { item in
                             TransferRow(item: item, actions: actions(for: item))
                         }
+                    } header: {
+                        // "Failed (3)": the count rolls as rows come and go
+                        // (it only changes with membership, never per tick).
+                        Text(section.title)
+                            .contentTransition(Motion.numeric(
+                                Double(section.items.count), reduceMotion: reduceMotion
+                            ))
                     }
                 }
             }

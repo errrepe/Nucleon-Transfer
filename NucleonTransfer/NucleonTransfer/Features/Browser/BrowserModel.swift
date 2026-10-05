@@ -148,8 +148,14 @@ final class BrowserModel {
         session.uploads?.uploadsBlockedBannerDismissed = true
     }
 
+    /// Upload attempts refused while blocked — the banner's icon wiggles
+    /// on each one, so a drop onto an already-visible banner still
+    /// answers.
+    private(set) var uploadRefusedCount = 0
+
     /// An upload attempt while blocked — the banner explains why.
     private func reshowUploadsBlockedBanner() {
+        uploadRefusedCount += 1
         #if DEBUG
         if previewUploadsBlocked != nil { previewBannerDismissed = false; return }
         if session.uploads == nil { DebugOverrides.shared.uploadsBannerDismissed = false; return }

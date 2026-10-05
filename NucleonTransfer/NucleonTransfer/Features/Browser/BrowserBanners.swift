@@ -42,7 +42,10 @@ struct PhotosReadOnlyBanner: View {
 /// F8.4-U1: shown once per run after Proton refused an upload with code
 /// 2000. Closing it keeps the upload controls disabled.
 struct UploadsBlockedBanner: View {
+    /// Bumped on every refused upload — wiggles the warning icon.
+    var refusals = 0
     var onDismiss: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         BannerStrip {
@@ -56,6 +59,10 @@ struct UploadsBlockedBanner: View {
             } icon: {
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundStyle(.yellow)
+                    // "That didn't work" for a drop onto a visible banner;
+                    // a pulse (no movement) under Reduce Motion.
+                    .symbolEffect(.wiggle, value: reduceMotion ? 0 : refusals)
+                    .symbolEffect(.pulse, value: reduceMotion ? refusals : 0)
             }
             .layoutPriority(1)
             Spacer(minLength: 8)

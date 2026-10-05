@@ -3,8 +3,8 @@
 // entirely when the account has no quota. The account menu is always rendered
 // so Sign Out stays reachable even if /users failed.
 // Polish pass: the quota bar fills from empty when the sidebar first
-// appears and eases to new values after uploads/trash (static under
-// Reduce Motion).
+// appears and eases to any later value (static under Reduce Motion). The
+// account is only refreshed at sign-in/restore today, so that is rare.
 import SwiftUI
 
 struct StorageFooterView: View {

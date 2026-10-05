@@ -164,7 +164,9 @@ struct FolderView: View {
             PhotosReadOnlyBanner()
         }
         if model.showsUploadsBlockedBanner {
-            UploadsBlockedBanner { model.dismissUploadsBlockedBanner() }
+            UploadsBlockedBanner(refusals: model.uploadRefusedCount) {
+                model.dismissUploadsBlockedBanner()
+            }
                 .transition(Motion.banner(reduceMotion: reduceMotion))
         }
         if case .failed(let message) = state.phase, !state.items.isEmpty {
@@ -336,6 +338,11 @@ private struct HoveredDropOverlay: View {
     let fallback: DriveLocation
 
     var body: some View {
-        DropOverlay(location: DropTargeting.destination(for: hover.item, fallback: fallback))
+        let destination = DropTargeting.destination(for: hover.item, fallback: fallback)
+        DropOverlay(location: destination)
+            // Trackpad "snap" as the drop target moves onto a folder row
+            // (or back to this folder) — the HIG's alignment case, and the
+            // app's only haptic. Follows the system haptics setting.
+            .sensoryFeedback(.alignment, trigger: destination)
     }
 }

@@ -2,6 +2,7 @@
 // Shown while AppSession.phase == .restoring: "Keep me signed in" stored a
 // session and the app is refreshing it and unlocking the keys — no
 // password needed. Same layout as UnlockingView; nothing to interact with.
+// Polish pass: fades in after a beat, so a fast restore never flashes it.
 import SwiftUI
 
 struct RestoringView: View {
@@ -12,6 +13,7 @@ struct RestoringView: View {
             Text("Signing in…")
                 .font(.headline)
         }
+        .delayedReveal()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .frame(minWidth: 420, minHeight: 320)
         .accessibilityElement(children: .combine)

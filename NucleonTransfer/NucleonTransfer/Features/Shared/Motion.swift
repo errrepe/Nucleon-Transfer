@@ -35,6 +35,12 @@ enum Motion {
     static func inline(reduceMotion: Bool) -> AnyTransition {
         reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -4))
     }
+
+    /// Counts that change in place ("Failed (3)", "Uploads: 4"): digits
+    /// roll toward the new value; a plain crossfade under Reduce Motion.
+    static func numeric(_ value: Double, reduceMotion: Bool) -> ContentTransition {
+        reduceMotion ? .opacity : .numericText(value: value)
+    }
 }
 
 /// Horizontal shake — macOS's "that didn't work" for a rejected password
@@ -66,19 +72,36 @@ extension View {
     }
 }
 
-/// Spinner that waits a beat before showing, so a fast load (a cache
-/// miss that returns in ~100 ms) never flashes "Loading…" over the table.
-struct DelayedProgressView: View {
-    let title: LocalizedStringKey
+/// Keeps a progress state invisible for a beat, then fades it in, so a
+/// fast load (a cache miss that returns in ~100 ms, a quick session
+/// restore) never flashes a spinner.
+struct DelayedReveal: ViewModifier {
     var delay: Duration = .milliseconds(250)
     @State private var isVisible = false
 
-    var body: some View {
-        ProgressView(title)
+    func body(content: Content) -> some View {
+        content
             .opacity(isVisible ? 1 : 0)
             .task {
                 try? await Task.sleep(for: delay)
                 withAnimation(.easeIn(duration: 0.2)) { isVisible = true }
             }
+    }
+}
+
+extension View {
+    /// See DelayedReveal.
+    func delayedReveal(after delay: Duration = .milliseconds(250)) -> some View {
+        modifier(DelayedReveal(delay: delay))
+    }
+}
+
+/// A titled spinner behind DelayedReveal.
+struct DelayedProgressView: View {
+    let title: LocalizedStringKey
+
+    var body: some View {
+        ProgressView(title)
+            .delayedReveal()
     }
 }

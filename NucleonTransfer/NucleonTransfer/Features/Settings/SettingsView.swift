@@ -39,6 +39,7 @@ struct SettingsView: View {
     @Environment(AppSession.self) private var session
     /// Last "Choose…" failure (bookmark couldn't be created); nil = none.
     @State private var folderError: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         TabView {
@@ -79,6 +80,9 @@ struct SettingsView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .help(downloadFolderPath)
+                            // "None" → the chosen folder eases in.
+                            .contentTransition(.interpolate)
+                            .animation(Motion.snappy, value: downloadFolderPath)
                         Button("Choose…") {
                             Task { await chooseDownloadFolder() }
                         }
@@ -86,24 +90,33 @@ struct SettingsView: View {
                 }
                 .disabled(askDownloadDestination)
                 if let folderError {
+                    // Opacity only: the Settings window resizes to fit
+                    // (AppKit owns that frame), so movement would clip.
                     Label(folderError, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundStyle(.red)
+                        .transition(.opacity)
                 }
             }
+            .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: folderError)
             Section("Simultaneous Transfers") {
-                Stepper(
-                    "Uploads: \(maxConcurrentUploads)",
-                    value: $maxConcurrentUploads,
-                    in: AppSettings.concurrencyRange
-                )
+                // The number rolls with each step.
+                Stepper(value: $maxConcurrentUploads, in: AppSettings.concurrencyRange) {
+                    Text("Uploads: \(maxConcurrentUploads)")
+                        .contentTransition(Motion.numeric(
+                            Double(maxConcurrentUploads), reduceMotion: reduceMotion
+                        ))
+                }
                 .monospacedDigit()
-                Stepper(
-                    "Downloads: \(maxConcurrentDownloads)",
-                    value: $maxConcurrentDownloads,
-                    in: AppSettings.concurrencyRange
-                )
+                .animation(Motion.snappy, value: maxConcurrentUploads)
+                Stepper(value: $maxConcurrentDownloads, in: AppSettings.concurrencyRange) {
+                    Text("Downloads: \(maxConcurrentDownloads)")
+                        .contentTransition(Motion.numeric(
+                            Double(maxConcurrentDownloads), reduceMotion: reduceMotion
+                        ))
+                }
                 .monospacedDigit()
+                .animation(Motion.snappy, value: maxConcurrentDownloads)
             }
         }
         .settingsFormLayout()
