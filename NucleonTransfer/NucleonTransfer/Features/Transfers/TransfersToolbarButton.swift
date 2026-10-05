@@ -13,7 +13,10 @@
 // samples come from UploadCoordinator's snapshot listener (F8.4-U7b), not
 // from this view.
 // Polish pass: the icon bounces once whenever the failed count changes,
-// so the badge change is noticed without a persistent animation.
+// so the badge change is noticed without a persistent animation. Pass 3:
+// it also bounces when a transfer starts while the popover is closed
+// ("Open Transfers when a transfer starts" off) — like Safari's
+// downloads button.
 import AppKit
 import SwiftUI
 
@@ -24,6 +27,8 @@ struct TransfersToolbarButton: View {
     /// (crash B1: EnvironmentValues assert on a background-hosted item).
     let session: AppSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Advances when a transfer starts with the popover closed.
+    @State private var startBounces = 0
 
     private var badgeState: TransferBadge {
         TransferDisplay.badge(
@@ -40,9 +45,14 @@ struct TransfersToolbarButton: View {
             Label("Transfers", systemImage: "arrow.up.arrow.down")
                 .symbolEffect(.pulse, options: .repeating, isActive: isInFlight)
                 .symbolEffect(.bounce, value: reduceMotion ? 0 : failedCount)
+                .symbolEffect(.bounce, value: reduceMotion ? 0 : startBounces)
         }
         // 0 hides the badge.
         .badge(failedCount)
+        .onChange(of: activity.transfersStarted) {
+            // The popover opening already shows the start.
+            if !activity.presentTransfers { startBounces += 1 }
+        }
         // M4: match the View-menu wording ("Show Transfers") and say
         // what the button does; the active/failed count rides along. The
         // AX label keeps the shorter "Transfers" form.
