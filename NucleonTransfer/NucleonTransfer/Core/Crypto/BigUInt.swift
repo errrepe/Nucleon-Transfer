@@ -5,6 +5,9 @@
 // < 2^32) is < 2^64, so plain UInt64 arithmetic is EXACT — no fullWidth,
 // no wrap-prone carry chains. Slower per-op than 64-bit limbs, but obviously
 // correct; a login needs only a handful of 2048-bit modPows.
+// modPow with an odd modulus (every SRP modulus) runs on a separate 64-bit
+// limb Montgomery core below (F8.3-P5); the 32-bit code is only used for the
+// cheap surrounding arithmetic.
 import Foundation
 
 struct BigUInt: Sendable, Equatable {
@@ -189,7 +192,21 @@ struct BigUInt: Sendable, Equatable {
         mod(mul(a, b), m)
     }
 
+    /// base^exp mod m. Odd moduli > 1 (every SRP modulus) use Montgomery
+    /// multiplication with a fixed 4-bit window (F8.3-P5); even moduli and
+    /// m == 1 keep the plain square-and-multiply path.
     static func modPow(_ base: BigUInt, _ exp: BigUInt, _ mod_: BigUInt) -> BigUInt {
+        precondition(!mod_.isZero, "modpow by zero")
+        if mod_.isEven || mod_.isOne {
+            return modPowSquareMultiply(base, exp, mod_)
+        }
+        return Montgomery.pow(mod(base, mod_), exp, mod_)
+    }
+
+    /// Reference path: right-to-left square-and-multiply over full long
+    /// division. Variable-time and slow; only for even moduli (no caller has
+    /// one today) and m == 1.
+    static func modPowSquareMultiply(_ base: BigUInt, _ exp: BigUInt, _ mod_: BigUInt) -> BigUInt {
         precondition(!mod_.isZero, "modpow by zero")
         var result = BigUInt.one
         var b = mod(base, mod_)
@@ -232,5 +249,226 @@ struct BigUInt: Sendable, Equatable {
             carry = v & 1
         }
         return BigUInt(limbs: out)
+    }
+}
+
+// MARK: - Montgomery exponentiation (F8.3-P5)
+
+/// Montgomery modular exponentiation for an odd modulus n > 1.
+///
+/// Internals use 64-bit limbs and CIOS (Coarsely Integrated Operand
+/// Scanning) multiplication: one interleaved multiply/reduce pass, no
+/// division, all operands in one preallocated scratch arena, 64x64->128
+/// products via `multipliedFullWidth`.
+///
+/// Exponent processing is a fixed 4-bit window, left to right: every window
+/// costs exactly 4 squarings + 1 multiplication, the window count depends
+/// only on max(exp limb count, modulus size), and the table entry is chosen by
+/// scanning all 16 entries with masks (no secret-indexed memory access). The
+/// final reduction in `mul` is a masked select, not a branch.
+///
+/// What is NOT constant-time (best-effort, honest list):
+/// - Swift gives no constant-time codegen guarantee; the masks are written
+///   branch-free but the optimizer could in principle reintroduce branches.
+/// - The window count leaks the exponent's normalized 32-bit limb count when
+///   it exceeds the modulus size (SRP exponents are < 2^2048, so it doesn't).
+/// - `BigUInt.mod(base, n)` before entry is the variable-time Knuth division
+///   (a no-op when base < n, as in SRP); R^2 mod n branches, but on n only.
+/// - Everything around modPow in SRP (`modMul`, `mod`, `sub`, `compare`,
+///   array allocation and normalization) is still the variable-time
+///   32-bit-limb code.
+private enum Montgomery {
+    /// Window width in bits. 4 divides 32, so a window never straddles limbs.
+    static let windowBits = 4
+    static let tableSize = 1 << windowBits
+
+    static func pow(_ base: BigUInt, _ exp: BigUInt, _ modulus: BigUInt) -> BigUInt {
+        precondition(!modulus.isEven && !modulus.isOne, "Montgomery needs an odd modulus > 1")
+        precondition(base.compare(modulus) < 0, "base must be reduced")
+        let s = (modulus.limbs.count + 1) / 2 // 64-bit limbs
+
+        // Arena layout (each slot s limbs): n, rr, base, one, acc, tmp,
+        // table[16]; plus s+2 limbs of CIOS scratch.
+        let slots = 6 + tableSize
+        let total = slots * s + s + 2
+        let arena = UnsafeMutablePointer<UInt64>.allocate(capacity: total)
+        arena.initialize(repeating: 0, count: total)
+        defer {
+            // Table and accumulator hold secret-derived powers: zero them.
+            _ = memset_s(arena, total * 8, 0, total * 8)
+            arena.deallocate()
+        }
+        let n = arena, rrM = arena + s, baseM = arena + 2 * s, one = arena + 3 * s
+        let acc = arena + 4 * s, tmp = arena + 5 * s, table = arena + 6 * s
+        let t = arena + slots * s
+
+        load(modulus, into: n, count: s)
+        squareOfR(n: n, bitLength: modulus.bitLength, s: s, into: rrM)
+        load(base, into: baseM, count: s)
+        one[0] = 1
+        let n0inv = negInverse(n[0])
+
+        // table[0] = R mod n (Montgomery 1), table[1] = base*R mod n, ...
+        mul(rrM, one, into: table, n: n, n0inv: n0inv, s: s, t: t)
+        mul(baseM, rrM, into: table + s, n: n, n0inv: n0inv, s: s, t: t)
+        for i in 2..<tableSize {
+            mul(table + (i - 1) * s, table + s, into: table + i * s, n: n, n0inv: n0inv, s: s, t: t)
+        }
+
+        // Fixed window count: covers the exponent and at least the modulus width.
+        let expBits = max(exp.limbs.count, modulus.limbs.count) * 32
+        let windows = expBits / windowBits
+        acc.update(from: table, count: s) // Montgomery 1
+        for w in stride(from: windows - 1, through: 0, by: -1) {
+            for _ in 0..<windowBits {
+                mul(acc, acc, into: acc, n: n, n0inv: n0inv, s: s, t: t)
+            }
+            // Window position is public; only the digit value is secret.
+            let pos = w * windowBits
+            let limb = pos / 32
+            let digit = limb < exp.limbs.count ? Int((exp.limbs[limb] >> UInt32(pos % 32)) & 0xF) : 0
+            select(table, digit, into: tmp, s: s)
+            mul(acc, tmp, into: acc, n: n, n0inv: n0inv, s: s, t: t)
+        }
+        // Leave Montgomery form: acc * 1 * R^-1.
+        mul(acc, one, into: tmp, n: n, n0inv: n0inv, s: s, t: t)
+
+        var out = [UInt32](repeating: 0, count: 2 * s)
+        for i in 0..<s {
+            out[2 * i] = UInt32(truncatingIfNeeded: tmp[i])
+            out[2 * i + 1] = UInt32(truncatingIfNeeded: tmp[i] >> 32)
+        }
+        return BigUInt(limbs: out)
+    }
+
+    /// 32-bit limbs -> zero-padded 64-bit limbs.
+    private static func load(_ x: BigUInt, into dst: UnsafeMutablePointer<UInt64>, count s: Int) {
+        for i in 0..<s {
+            let lo = 2 * i < x.limbs.count ? UInt64(x.limbs[2 * i]) : 0
+            let hi = 2 * i + 1 < x.limbs.count ? UInt64(x.limbs[2 * i + 1]) : 0
+            dst[i] = lo | (hi << 32)
+        }
+    }
+
+    /// RR = R^2 mod n with R = 2^(64*s), by modular doubling from
+    /// 2^(bitLength-1) < n. Avoids `BigUInt.divmod`, whose quotient-digit
+    /// correction loop degenerates for moduli with a small top limb.
+    /// Depends on n only (public).
+    private static func squareOfR(n: UnsafeMutablePointer<UInt64>, bitLength: Int, s: Int,
+                                  into x: UnsafeMutablePointer<UInt64>) {
+        for j in 0..<s { x[j] = 0 }
+        let top = bitLength - 1
+        x[top / 64] = 1 << UInt64(top % 64)
+        for _ in 0..<(128 * s - top) {
+            // x = 2x (carry-out c), then x -= n iff 2x >= n.
+            var c: UInt64 = 0
+            for j in 0..<s {
+                let v = x[j]
+                x[j] = (v << 1) | c
+                c = v >> 63
+            }
+            // Compare pass (borrow of x - n), then subtract if needed.
+            var borrow: UInt64 = 0
+            for j in 0..<s {
+                let (d1, b1) = x[j].subtractingReportingOverflow(n[j])
+                borrow = bit(b1) | bit(d1.subtractingReportingOverflow(borrow).overflow)
+            }
+            if c == 1 || borrow == 0 {
+                borrow = 0
+                for j in 0..<s {
+                    let (d1, b1) = x[j].subtractingReportingOverflow(n[j])
+                    let (d2, b2) = d1.subtractingReportingOverflow(borrow)
+                    x[j] = d2
+                    borrow = bit(b1) | bit(b2)
+                }
+            }
+        }
+    }
+
+    /// -n0^-1 mod 2^64 by Newton iteration (n0 odd; n0*n0 == 1 mod 8 gives
+    /// 3 correct bits, each step doubles them: 3 -> 6 -> 12 -> 24 -> 48 -> 96).
+    private static func negInverse(_ n0: UInt64) -> UInt64 {
+        var inv = n0
+        for _ in 0..<5 { inv = inv &* (2 &- n0 &* inv) }
+        return 0 &- inv
+    }
+
+    /// Constant-time table lookup: reads every entry, keeps the one whose
+    /// index equals `digit` via an all-ones/all-zeros mask.
+    private static func select(_ table: UnsafeMutablePointer<UInt64>, _ digit: Int,
+                               into dst: UnsafeMutablePointer<UInt64>, s: Int) {
+        for j in 0..<s { dst[j] = 0 }
+        let d = UInt64(truncatingIfNeeded: digit)
+        for i in 0..<tableSize {
+            let diff = UInt64(truncatingIfNeeded: i) ^ d
+            // nonZero = 1 iff diff != 0 (top bit of diff | -diff).
+            let nonZero = (diff | (0 &- diff)) >> 63
+            let mask = nonZero &- 1 // all ones iff i == digit
+            let entry = table + i * s
+            for j in 0..<s { dst[j] |= entry[j] & mask }
+        }
+    }
+
+    /// Carry/borrow flag as 0 or 1 without a conditional (Bool is one byte
+    /// holding 0 or 1); `flag ? 1 : 0` measurably slows the release build
+    /// and may compile to a branch.
+    @inline(__always)
+    private static func bit(_ flag: Bool) -> UInt64 {
+        UInt64(unsafeBitCast(flag, to: UInt8.self))
+    }
+
+    /// out = a * b * R^-1 mod n (CIOS). Requires a, b < n. `out` may alias
+    /// `a` or `b` (all reads finish before the first write to `out`); `t` is
+    /// s+2 limbs of scratch and must not alias anything else.
+    /// Each limb step is x*y + t + carry <= (2^64-1)^2 + 2(2^64-1) = 2^128-1,
+    /// so (hi, lo) plus the two carry bits never overflows `hi`.
+    private static func mul(_ a: UnsafeMutablePointer<UInt64>, _ b: UnsafeMutablePointer<UInt64>,
+                            into out: UnsafeMutablePointer<UInt64>,
+                            n: UnsafeMutablePointer<UInt64>, n0inv: UInt64, s: Int,
+                            t: UnsafeMutablePointer<UInt64>) {
+        for j in 0..<(s + 2) { t[j] = 0 }
+        for i in 0..<s {
+            // t += a * b[i]
+            let bi = b[i]
+            var carry: UInt64 = 0
+            for j in 0..<s {
+                let (hi, lo) = a[j].multipliedFullWidth(by: bi)
+                let (s1, c1) = lo.addingReportingOverflow(t[j])
+                let (s2, c2) = s1.addingReportingOverflow(carry)
+                t[j] = s2
+                carry = hi &+ bit(c1) &+ bit(c2)
+            }
+            let (top, ct) = t[s].addingReportingOverflow(carry)
+            t[s] = top
+            t[s + 1] = bit(ct)
+
+            // t = (t + m*n) / 2^64, with m chosen so the low limb cancels.
+            let m = t[0] &* n0inv
+            let (h0, l0) = m.multipliedFullWidth(by: n[0])
+            carry = h0 &+ bit(l0.addingReportingOverflow(t[0]).overflow) // low limb -> 0
+            for j in 1..<s {
+                let (hi, lo) = m.multipliedFullWidth(by: n[j])
+                let (s1, c1) = lo.addingReportingOverflow(t[j])
+                let (s2, c2) = s1.addingReportingOverflow(carry)
+                t[j - 1] = s2
+                carry = hi &+ bit(c1) &+ bit(c2)
+            }
+            let (up, cu) = t[s].addingReportingOverflow(carry)
+            t[s - 1] = up
+            t[s] = t[s + 1] &+ bit(cu)
+        }
+
+        // t < 2n. out = t - n, then keep it iff t >= n, i.e. t[s] == 1 or
+        // no final borrow (masked select, no branch).
+        var borrow: UInt64 = 0
+        for j in 0..<s {
+            let (d1, b1) = t[j].subtractingReportingOverflow(n[j])
+            let (d2, b2) = d1.subtractingReportingOverflow(borrow)
+            out[j] = d2
+            borrow = bit(b1) | bit(b2) // at most one of b1, b2
+        }
+        let keepDiff = (t[s] | (borrow ^ 1)) & 1
+        let mask = 0 &- keepDiff
+        for j in 0..<s { out[j] = (out[j] & mask) | (t[j] & ~mask) }
     }
 }
