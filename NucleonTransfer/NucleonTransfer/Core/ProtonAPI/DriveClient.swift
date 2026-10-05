@@ -222,9 +222,18 @@ actor DriveClient {
     ///   deleted before the new draft is created (FileDraftFlow).
     /// - `onDraftCreated`: reports the new draft's LinkID/RevisionID so the
     ///   queue persists them before any block is sent.
-    /// Any failure after the draft exists deletes it (best effort, in an
-    /// unstructured task so a cancelled upload still cleans up) — the
-    /// ProtonDriveApps/sdk upload manager's `deleteDraftNode` on failure.
+    /// - `onCommitSending`: fired right before the commit request goes out
+    ///   (the queue persists it: from then on a failure may hide a
+    ///   committed revision).
+    /// Any failure before the commit deletes the draft (best effort) — the
+    /// ProtonDriveApps/sdk upload manager's `deleteDraftNode` on failure. A
+    /// failed commit is verified first (UploadCommitVerification — the
+    /// SDK's `isRevisionUploaded`): committed → success; verifiably not
+    /// committed → draft deleted; unknown → the draft is left for the next
+    /// attempt's verification (it may be the user's committed file).
+    /// Cleanup and verification run in DETACHED tasks: they must not
+    /// inherit a cancelled (paused/removed) upload's cancellation, which
+    /// would abort their requests.
     func uploadFile(
         shareID: String,
         parentLinkID: String,
@@ -241,7 +250,8 @@ actor DriveClient {
         modificationTime: Date = Date(),
         clientUID: String? = nil,
         knownDraftLinkID: String? = nil,
-        onDraftCreated: (@Sendable (_ linkID: String, _ revisionID: String) async -> Void)? = nil
+        onDraftCreated: (@Sendable (_ linkID: String, _ revisionID: String) async -> Void)? = nil,
+        onCommitSending: (@Sendable () async -> Void)? = nil
     ) async throws -> (linkID: String, revisionID: String, node: FolderCreate.NodeMaterial) {
         var prepared = try FileUpload.prepareUpload(
             fileName: fileName, parentLinkID: parentLinkID, data: data,
@@ -256,24 +266,63 @@ actor DriveClient {
             knownDraftLinkID: knownDraftLinkID
         )
         await onDraftCreated?(ids.linkID, ids.revisionID)
+        let commit: CommitRevisionRequest
         do {
-            try await uploadBlocksAndCommit(
+            commit = try await uploadBlocks(
                 prepared: prepared, ids: ids, shareID: shareID, addressID: addressID,
                 addressKeys: addressKeys, signatureAddress: signatureAddress,
                 signatureEmail: signatureEmail
             )
         } catch {
-            // Unstructured on purpose: does not inherit the (possibly
-            // cancelled) upload task, so a pause still removes the draft.
-            _ = await Task {
-                try? await self.deleteDraft(shareID: shareID, parentLinkID: parentLinkID, linkID: ids.linkID)
-            }.value
+            await discardDraftDetached(shareID: shareID, parentLinkID: parentLinkID, linkID: ids.linkID)
             throw error
         }
-        return (ids.linkID, ids.revisionID, prepared.node)
+        await onCommitSending?()
+        let outcome = await UploadCommitVerification.commit(
+            send: {
+                _ = try await self.commitRevision(
+                    shareID: shareID, linkID: ids.linkID,
+                    revisionID: ids.revisionID, request: commit
+                )
+            },
+            isCommitted: {
+                try await Task.detached {
+                    try await self.isRevisionCommitted(
+                        shareID: shareID, linkID: ids.linkID,
+                        revisionID: ids.revisionID, parentLinkID: parentLinkID
+                    )
+                }.value
+            }
+        )
+        switch outcome {
+        case .committed:
+            return (ids.linkID, ids.revisionID, prepared.node)
+        case let .notCommitted(error):
+            await discardDraftDetached(shareID: shareID, parentLinkID: parentLinkID, linkID: ids.linkID)
+            throw error
+        case let .unknown(error):
+            throw error
+        }
     }
 
-    private func uploadBlocksAndCommit(
+    /// The SDK's `isRevisionUploaded` over GET link (UploadCommitVerification).
+    func isRevisionCommitted(
+        shareID: String, linkID: String, revisionID: String, parentLinkID: String?
+    ) async throws -> Bool {
+        let link = try await getLink(shareID: shareID, linkID: linkID)
+        return UploadCommitVerification.isCommitted(link, revisionID: revisionID, parentLinkID: parentLinkID)
+    }
+
+    /// Best-effort draft delete in a detached task (not cancelled with the
+    /// upload); awaited so the caller's error surfaces after the cleanup.
+    private func discardDraftDetached(shareID: String, parentLinkID: String, linkID: String) async {
+        _ = await Task.detached {
+            try? await self.deleteDraft(shareID: shareID, parentLinkID: parentLinkID, linkID: linkID)
+        }.value
+    }
+
+    /// Uploads every block and builds the commit request (not sent).
+    private func uploadBlocks(
         prepared: FileUpload.PreparedUpload,
         ids: (linkID: String, revisionID: String),
         shareID: String,
@@ -281,7 +330,7 @@ actor DriveClient {
         addressKeys: [KeyringCache.UnlockedKey],
         signatureAddress: String?,
         signatureEmail: String?
-    ) async throws {
+    ) async throws -> CommitRevisionRequest {
         var manifestHashes: [Data] = []
         if !prepared.blocks.isEmpty {
             let links = try await requestBlockUploads(
@@ -301,14 +350,10 @@ actor DriveClient {
             }
             manifestHashes = prepared.blocks.map(\.hash)
         }
-        let commit = try FileUpload.buildCommit(
+        return try FileUpload.buildCommit(
             manifestHashes: manifestHashes, xAttrJSON: prepared.xAttrJSON,
             node: prepared.node, addressKeys: addressKeys,
             signatureAddress: signatureAddress, signatureEmail: signatureEmail
-        )
-        _ = try await commitRevision(
-            shareID: shareID, linkID: ids.linkID,
-            revisionID: ids.revisionID, request: commit
         )
     }
 

@@ -120,6 +120,9 @@ final class BrowserModel {
         if previewStubbed { return }
         let cached = state(for: loc)
         if cached.phase == .loaded, !force, !cached.isStale { return }
+        // A listing of this folder is already in flight and nothing marked
+        // it stale since: it will publish — don't start a duplicate.
+        if cached.phase == .loading, !force, !cached.isStale { return }
         let token = loadGate.begin(folder: loc.linkID)
         var starting = cached
         starting.phase = .loading

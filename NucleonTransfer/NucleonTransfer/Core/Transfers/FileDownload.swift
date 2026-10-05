@@ -413,8 +413,17 @@ enum FileDownload {
     /// If `destination` exists at move time the next free `name (n)` is
     /// used — an existing file is never removed (F8.2-R5). Creates
     /// intermediate directories. Returns the final URL.
+    /// Every candidate the exclusive move refused is excluded from the next
+    /// probe (F8.2 review): a name the existence check calls free but the
+    /// rename still refuses (an item that `itemExists` cannot see) is never
+    /// retried, so each attempt targets a different name. `move` is a test
+    /// seam (default `moveExclusive`).
     @discardableResult
-    static func atomicWrite(_ data: Data, to destination: URL) throws -> URL {
+    static func atomicWrite(
+        _ data: Data,
+        to destination: URL,
+        move: (URL, URL) throws -> Bool = { try FileDownload.moveExclusive($0, to: $1) }
+    ) throws -> URL {
         let dir = destination.deletingLastPathComponent()
         try FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true
@@ -423,9 +432,14 @@ enum FileDownload {
         let part = try writePart(data, in: dir, name: name)
         do {
             var candidate = destination
+            var refused: Set<String> = []
             for _ in 0..<1000 {
-                if try moveExclusive(part, to: candidate) { return candidate }
-                candidate = uniqueDestination(in: dir, name: name)
+                if try move(part, candidate) { return candidate }
+                refused.insert(candidate.lastPathComponent)
+                candidate = uniqueDestination(in: dir, name: name) { url in
+                    refused.contains(url.lastPathComponent) || FileDownload.itemExists(at: url)
+                }
+                guard !refused.contains(candidate.lastPathComponent) else { break }
             }
             throw FileDownloadError.destinationUnavailable
         } catch {

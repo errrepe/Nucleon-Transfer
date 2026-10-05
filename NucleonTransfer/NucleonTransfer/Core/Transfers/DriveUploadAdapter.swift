@@ -10,6 +10,9 @@
 // F8.2-R4: the job's local file is opened through LocalFileAccess —
 // bookmark resolved + security scope started for the job's duration (and
 // stopped on every exit); a stale bookmark is re-created and persisted.
+// F8.2 review: a retry whose previous attempt already sent the commit first
+// verifies the draft (UploadCommitVerification — lost commit response), and
+// cancelled/removed jobs' drafts are discarded via `discardDraft`.
 
 import Foundation
 
@@ -46,6 +49,17 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
         progress: @Sendable (Int64) async -> Void,
         events: TransferUploadEvents
     ) async throws -> String? {
+        // Lost commit response: the previous attempt's revision may be
+        // live already — then the job is done, nothing is re-uploaded.
+        let drive = self.drive
+        let shareID = job.shareID
+        if let committed = await UploadCommitVerification.alreadyCommitted(
+            job: job,
+            getLink: { try await drive.getLink(shareID: shareID, linkID: $0) }
+        ) {
+            await progress(job.bytesTotal)
+            return committed
+        }
         // F8.2-R4: resolve the bookmark and hold its security scope for
         // the whole job; `defer` balances it on success, failure and
         // cancellation alike.
@@ -80,10 +94,25 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
             modificationTime: mtime,
             clientUID: job.clientUID,
             knownDraftLinkID: job.draftLinkID,
-            onDraftCreated: events.draftCreated
+            onDraftCreated: events.draftCreated,
+            onCommitSending: events.commitSending
         )
         await progress(Int64(data.count))
         return done.linkID
+    }
+
+    /// Deletes a cancelled/removed job's draft (delete_multiple on its
+    /// parent — DriveClient.deleteDraft, the FileDraftFlow path), never a
+    /// revision that got committed (UploadCommitVerification.discardDraft).
+    func discardDraft(job: TransferJob) async throws {
+        let drive = self.drive
+        let shareID = job.shareID
+        let parentLinkID = job.parentLinkID
+        try await UploadCommitVerification.discardDraft(
+            job: job,
+            getLink: { try await drive.getLink(shareID: shareID, linkID: $0) },
+            delete: { try await drive.deleteDraft(shareID: shareID, parentLinkID: parentLinkID, linkID: $0) }
+        )
     }
 
     // MARK: - RemoteFolderCreator

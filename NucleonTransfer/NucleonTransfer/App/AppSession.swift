@@ -206,7 +206,10 @@ final class AppSession {
         // address-key copies — stop them (records land as "Cancelled")
         // before the keys are dropped below.
         await downloads?.cancelAll()
-        await queue.pauseAll()
+        // B12 / F8.2 review: stop the running uploads WITHOUT parking them
+        // as user-paused — they continue when this account signs back in
+        // (suspendForSignOut also detaches the uploader).
+        await queue.suspendForSignOut()
         await queue.setUploader(nil)
         await uploads?.stop()
         // B12: hide the account's jobs until someone signs in again.

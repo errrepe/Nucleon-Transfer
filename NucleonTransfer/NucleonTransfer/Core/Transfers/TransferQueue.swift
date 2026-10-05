@@ -56,6 +56,11 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
     /// as the draft exists; cleared on success) — a relaunch deletes it.
     var draftLinkID: String?
     var draftRevisionID: String?
+    /// The commit of that draft was sent (F8.2 review): a failure after
+    /// this point may hide a revision the server DID commit (lost
+    /// response), so the next attempt verifies before re-uploading and the
+    /// draft is never blindly deleted.
+    var draftCommitSent: Bool
     /// Proton user ID of the account that enqueued the job (F8.2-R7 / B12).
     /// The queue only shows and runs jobs of the signed-in account. nil =
     /// written before B12 (or enqueued while unscoped) — adopted by the
@@ -66,7 +71,7 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
         case id, fileName, relativePath, localPath, localBookmark, shareID,
              parentLinkID, state, bytesTotal, bytesDone, attempt, maxAttempts,
              errorMessage, createdAt, updatedAt, remoteLinkID,
-             clientUID, draftLinkID, draftRevisionID, accountID
+             clientUID, draftLinkID, draftRevisionID, draftCommitSent, accountID
     }
 
     /// Tolerant decode (F8.2-R2): only the identity/destination fields are
@@ -95,6 +100,7 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
         clientUID = try c.decodeIfPresent(String.self, forKey: .clientUID)
         draftLinkID = try c.decodeIfPresent(String.self, forKey: .draftLinkID)
         draftRevisionID = try c.decodeIfPresent(String.self, forKey: .draftRevisionID)
+        draftCommitSent = (try? c.decodeIfPresent(Bool.self, forKey: .draftCommitSent)) ?? false
         accountID = try c.decodeIfPresent(String.self, forKey: .accountID)
     }
 
@@ -130,6 +136,7 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
         createdAt = Date()
         updatedAt = Date()
         clientUID = UUID().uuidString
+        draftCommitSent = false
         self.accountID = accountID
     }
 }
@@ -299,9 +306,18 @@ protocol TransferUploader: Sendable {
         progress: @Sendable (Int64) async -> Void,
         events: TransferUploadEvents
     ) async throws -> String?
+
+    /// Best-effort removal of the remote draft a cancelled/removed job left
+    /// behind (`job.draftLinkID`, F8.2 review). Called from a detached,
+    /// non-cancelled task. Must never delete a revision the server already
+    /// committed (`job.draftCommitSent`). Throws when the draft may still
+    /// exist. Default: nothing to clean up (offline fakes).
+    func discardDraft(job: TransferJob) async throws
 }
 
 extension TransferUploader {
+    func discardDraft(job: TransferJob) async throws {}
+
     func upload(
         job: TransferJob,
         progress: @Sendable (Int64) async -> Void,
@@ -318,13 +334,18 @@ struct TransferUploadEvents: Sendable {
     var draftCreated: @Sendable (_ linkID: String, _ revisionID: String) async -> Void
     /// The job's bookmark was stale and has been re-created (F8.2-R4).
     var bookmarkRefreshed: @Sendable (_ bookmark: Data) async -> Void
+    /// The draft's commit request is about to be sent (F8.2 review): from
+    /// here on a failure may hide a committed revision.
+    var commitSending: @Sendable () async -> Void
 
     init(
         draftCreated: @escaping @Sendable (_ linkID: String, _ revisionID: String) async -> Void = { _, _ in },
-        bookmarkRefreshed: @escaping @Sendable (_ bookmark: Data) async -> Void = { _ in }
+        bookmarkRefreshed: @escaping @Sendable (_ bookmark: Data) async -> Void = { _ in },
+        commitSending: @escaping @Sendable () async -> Void = {}
     ) {
         self.draftCreated = draftCreated
         self.bookmarkRefreshed = bookmarkRefreshed
+        self.commitSending = commitSending
     }
 }
 
@@ -372,6 +393,13 @@ actor TransferQueue {
     private var inFlight: [UUID: UInt64] = [:]
     private var tasks: [UUID: Task<Void, Never>] = [:]
     private var nextGeneration: UInt64 = 0
+    /// Removed jobs whose run is still unwinding: the run may still record
+    /// a draft, which is discarded when it returns (F8.2 review).
+    private var removedInFlight: [UUID: TransferJob] = [:]
+    /// Detached draft-cleanup tasks (F8.2 review), keyed by a token so a
+    /// finished one drops itself.
+    private var cleanups: [UInt64: Task<Void, Never>] = [:]
+    private var nextCleanup: UInt64 = 0
     private var uploader: (any TransferUploader)?
     private let store: (any TransferQueueStore)?
     /// Jobs outside the scope are hidden from `snapshot`/the listener and
@@ -655,6 +683,33 @@ actor TransferQueue {
         }
     }
 
+    /// Sign-out (F8.2 review / B12): stops the active scope's uploads
+    /// WITHOUT parking them as user-paused, so they continue when the same
+    /// account signs back in. The uploader is detached first (no run can
+    /// be pumped with the leaving account's keys), running jobs go back to
+    /// `.queued` and their tasks are cancelled. A cancelled run then finds
+    /// its job no longer `.uploading` and returns without touching it —
+    /// the same state guard that protects pause/cancel (`run`), so the
+    /// `.cancelled` branch (which parks as `.paused`) is never reached for
+    /// a suspended job. A run that still completes records `.done`.
+    /// Callers then switch the scope (`setAccountScope(.signedOut)`).
+    func suspendForSignOut() {
+        uploader = nil
+        var touched = false
+        for id in order where isVisible(id) {
+            guard var j = jobs[id], j.state == .uploading else { continue }
+            j.state = .queued
+            j.updatedAt = Date()
+            jobs[id] = j
+            tasks[id]?.cancel()
+            touched = true
+        }
+        if touched {
+            persist(urgent: true)
+            publish()
+        }
+    }
+
     func resume(id: UUID) {
         guard isVisible(id), var j = jobs[id], j.state == .paused else { return }
         j.state = .queued
@@ -674,7 +729,12 @@ actor TransferQueue {
             j.state = .cancelled
             j.updatedAt = Date()
             jobs[id] = j
-            tasks[id]?.cancel()
+            if inFlight[id] != nil {
+                // The run's exit discards whatever draft it ends up with.
+                tasks[id]?.cancel()
+            } else {
+                scheduleDiscard(j, using: uploader)
+            }
             persist(urgent: true)
             publish()
         case .done, .cancelled:
@@ -726,9 +786,16 @@ actor TransferQueue {
     /// (`inFlight`) until its task really returns — releasing it here let
     /// the pump start another upload while this one was still unwinding,
     /// exceeding the concurrency limit (F8.2-R1).
+    /// Its server draft (if any) is discarded best-effort — at once when
+    /// idle, else when the unwinding run returns (F8.2 review).
     func remove(id: UUID) {
-        guard isVisible(id) else { return }
-        tasks[id]?.cancel()
+        guard isVisible(id), let removed = jobs[id] else { return }
+        if inFlight[id] != nil {
+            removedInFlight[id] = removed
+            tasks[id]?.cancel()
+        } else {
+            scheduleDiscard(removed, using: uploader)
+        }
         jobs[id] = nil
         order.removeAll { $0 == id }
         persist(urgent: true)
@@ -803,6 +870,13 @@ actor TransferQueue {
                 tasks[id] = nil
                 // Resumed while this run was unwinding: back in line.
                 if jobs[id]?.state == .queued { fifo.append(id) }
+                // Cancelled or removed mid-upload: the job never runs
+                // again, so its draft is discarded here (F8.2 review).
+                if let removed = removedInFlight.removeValue(forKey: id) {
+                    scheduleDiscard(removed, using: uploader)
+                } else if let j = jobs[id], j.state == .cancelled {
+                    scheduleDiscard(j, using: uploader)
+                }
             }
             persist(urgent: true)
             publish()
@@ -820,6 +894,9 @@ actor TransferQueue {
             },
             bookmarkRefreshed: { [self] bookmark in
                 await self.recordBookmark(id: id, generation: generation, bookmark: bookmark)
+            },
+            commitSending: { [self] in
+                await self.recordCommitSending(id: id, generation: generation)
             }
         )
         // Attempt loop: transient failures back off in-slot; pause/cancel win.
@@ -833,13 +910,18 @@ actor TransferQueue {
                 // The server committed the file. Record it even if the job
                 // was paused (or paused+resumed) meanwhile: discarding the
                 // success would make the next run upload it a second time.
-                // A removed job stays removed.
-                guard owns(id, generation), var done = jobs[id] else { return }
+                // A removed job stays removed (its draft is now a real
+                // file — nothing to discard).
+                guard owns(id, generation), var done = jobs[id] else {
+                    if owns(id, generation) { removedInFlight[id] = nil }
+                    return
+                }
                 done.state = .done
                 done.bytesDone = done.bytesTotal
                 done.remoteLinkID = linkID
                 done.draftLinkID = nil
                 done.draftRevisionID = nil
+                done.draftCommitSent = false
                 done.errorMessage = nil
                 done.updatedAt = Date()
                 jobs[id] = done
@@ -897,12 +979,67 @@ actor TransferQueue {
 
     /// Persists the draft the current attempt created (F8.2-R3), so the
     /// next attempt — even after a crash — can delete it.
+    /// A removed job's still-unwinding run records into `removedInFlight`
+    /// so its exit discards the right draft.
     private func recordDraft(id: UUID, generation: UInt64, linkID: String, revisionID: String) {
-        guard owns(id, generation), var j = jobs[id] else { return }
-        j.draftLinkID = linkID
-        j.draftRevisionID = revisionID
+        guard owns(id, generation) else { return }
+        mutateRunJob(id) {
+            $0.draftLinkID = linkID
+            $0.draftRevisionID = revisionID
+            $0.draftCommitSent = false
+        }
+    }
+
+    /// The current draft's commit is going out (F8.2 review).
+    private func recordCommitSending(id: UUID, generation: UInt64) {
+        guard owns(id, generation) else { return }
+        mutateRunJob(id) { $0.draftCommitSent = true }
+    }
+
+    private func mutateRunJob(_ id: UUID, _ change: (inout TransferJob) -> Void) {
+        if var j = jobs[id] {
+            change(&j)
+            jobs[id] = j
+            persist(urgent: true)
+        } else if var r = removedInFlight[id] {
+            change(&r)
+            removedInFlight[id] = r
+        }
+    }
+
+    // MARK: draft cleanup (F8.2 review)
+
+    /// Discards `job`'s server draft in a DETACHED task: it must not
+    /// inherit a cancelled upload's cancellation (URLSession would abort
+    /// the delete) nor wait on the slot. Success clears the persisted
+    /// draft IDs (if the job still exists and still points at that draft);
+    /// failure keeps them — a relaunch's FileDraftFlow deletes the draft.
+    private func scheduleDiscard(_ job: TransferJob, using uploader: (any TransferUploader)?) {
+        guard let linkID = job.draftLinkID, let uploader else { return }
+        nextCleanup &+= 1
+        let token = nextCleanup
+        cleanups[token] = Task.detached { [self] in
+            let discarded = (try? await uploader.discardDraft(job: job)) != nil
+            await self.cleanupFinished(token, id: job.id, linkID: linkID, discarded: discarded)
+        }
+    }
+
+    private func cleanupFinished(_ token: UInt64, id: UUID, linkID: String, discarded: Bool) {
+        cleanups[token] = nil
+        guard discarded, var j = jobs[id], j.draftLinkID == linkID, inFlight[id] == nil else { return }
+        j.draftLinkID = nil
+        j.draftRevisionID = nil
+        j.draftCommitSent = false
         jobs[id] = j
         persist(urgent: true)
+    }
+
+    /// Test seam: waits for every scheduled draft cleanup.
+    func waitForDraftCleanups() async {
+        while let next = cleanups.first {
+            await next.value.value
+            cleanups[next.key] = nil
+        }
     }
 
     /// Persists a re-created (previously stale) bookmark (F8.2-R4).
