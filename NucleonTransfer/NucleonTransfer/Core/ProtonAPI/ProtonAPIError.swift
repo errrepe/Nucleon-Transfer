@@ -23,8 +23,10 @@ enum ProtonAPIError: Error, Sendable, Equatable {
     /// Non-2xx HTTP response that carried no usable Proton envelope success
     /// (storage host, or an API body that would not decode). `status` is the
     /// HTTP status (for retry classification: 429/5xx transient, etc.);
-    /// `code` is the envelope `Code` when the body had one.
-    case http(status: Int, code: Int?, message: String)
+    /// `code` is the envelope `Code` when the body had one. `retryAfter` is
+    /// the parsed `Retry-After` header in seconds (F8.2-R3; 429/503 answers
+    /// carry it — go-proton-api retries 429/503 honouring it via resty).
+    case http(status: Int, code: Int?, message: String, retryAfter: TimeInterval? = nil)
     /// A server-supplied storage URL failed the https + Proton-host check
     /// (`AppVersion.storageHostSuffixes`); nothing was sent. Carries only the
     /// host (block URLs embed tokens in-path — never echo the full URL).
@@ -48,8 +50,8 @@ enum ProtonAPIError: Error, Sendable, Equatable {
             return c1 == c2 && m1 == m2
         case let (.srpParamsOutOfBounds(a), .srpParamsOutOfBounds(b)):
             return a == b
-        case let (.http(s1, c1, m1), .http(s2, c2, m2)):
-            return s1 == s2 && c1 == c2 && m1 == m2
+        case let (.http(s1, c1, m1, r1), .http(s2, c2, m2, r2)):
+            return s1 == s2 && c1 == c2 && m1 == m2 && r1 == r2
         case let (.untrustedStorageHost(a), .untrustedStorageHost(b)):
             return a == b
         case let (.unsupportedAuthVersion(a), .unsupportedAuthVersion(b)):
@@ -87,7 +89,7 @@ extension ProtonAPIError: LocalizedError {
         case .keyVerificationFailed: return "Unlocked key does not match its public key."
         case let .srpParamsOutOfBounds(msg): return "SRP parameter error: \(msg)."
         case let .api(code, message): return "Proton API \(code): \(message)."
-        case let .http(status, code, message):
+        case let .http(status, code, message, _):
             if let code { return "HTTP \(status) (Proton \(code)): \(message)." }
             return "HTTP \(status): \(message)."
         case let .untrustedStorageHost(host):

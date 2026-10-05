@@ -126,6 +126,17 @@ actor DriveClient {
         return (res.availableHashes, res.pendingHashes)
     }
 
+    /// Deletes a DRAFT file link (stale draft of a failed attempt):
+    /// delete_multiple on its parent, skipping trash — the call
+    /// henrybear327/Proton-API-Bridge `file_upload.go`
+    /// `handleRevisionConflict` makes for a draft-only link
+    /// (`c.DeleteChildren(ctx, shareID, link.ParentLinkID, linkID)`); the
+    /// ProtonDriveApps/sdk `upload/apiService.ts` `deleteDraft` uses the
+    /// v2-volume form of the same delete_multiple.
+    func deleteDraft(shareID: String, parentLinkID: String, linkID: String) async throws {
+        try await deleteChildren(shareID: shareID, parentLinkID: parentLinkID, linkIDs: [linkID])
+    }
+
     /// Posts a prepared file draft. Returns the draft LinkID + RevisionID.
     func createFileDraft(
         shareID: String, request: CreateFileRequest
@@ -206,6 +217,14 @@ actor DriveClient {
     /// - `addressID`: uploader's address ID for the /drive/blocks session.
     /// - `blockSize`: plaintext chunk size (default 4 MiB); empty data takes
     ///   the no-blocks path (draft + commit, manifest over zero hashes).
+    /// - `clientUID`: the job's ClientUID, sent with the draft (F8.2-R3).
+    /// - `knownDraftLinkID`: draft LinkID a previous attempt persisted —
+    ///   deleted before the new draft is created (FileDraftFlow).
+    /// - `onDraftCreated`: reports the new draft's LinkID/RevisionID so the
+    ///   queue persists them before any block is sent.
+    /// Any failure after the draft exists deletes it (best effort, in an
+    /// unstructured task so a cancelled upload still cleans up) — the
+    /// ProtonDriveApps/sdk upload manager's `deleteDraftNode` on failure.
     func uploadFile(
         shareID: String,
         parentLinkID: String,
@@ -219,20 +238,50 @@ actor DriveClient {
         signatureAddress: String? = nil,
         signatureEmail: String? = nil,
         blockSize: Int = FileUpload.defaultBlockSize,
-        modificationTime: Date = Date()
+        modificationTime: Date = Date(),
+        clientUID: String? = nil,
+        knownDraftLinkID: String? = nil,
+        onDraftCreated: (@Sendable (_ linkID: String, _ revisionID: String) async -> Void)? = nil
     ) async throws -> (linkID: String, revisionID: String, node: FolderCreate.NodeMaterial) {
-        let prepared = try FileUpload.prepareUpload(
+        var prepared = try FileUpload.prepareUpload(
             fileName: fileName, parentLinkID: parentLinkID, data: data,
             mimeType: mimeType, modificationTime: modificationTime,
             blockSize: blockSize, parentKeys: parentKeys,
             parentHashKey: parentHashKey, addressKeys: addressKeys,
             signatureAddress: signatureAddress, signatureEmail: signatureEmail
         )
-        _ = try await checkAvailableHashes(
-            shareID: shareID, parentLinkID: parentLinkID,
-            hashes: [prepared.request.hash]
+        prepared.request.clientUID = clientUID
+        let ids = try await FileDraftFlow.createDraft(
+            api: self, shareID: shareID, request: prepared.request,
+            knownDraftLinkID: knownDraftLinkID
         )
-        let ids = try await createFileDraft(shareID: shareID, request: prepared.request)
+        await onDraftCreated?(ids.linkID, ids.revisionID)
+        do {
+            try await uploadBlocksAndCommit(
+                prepared: prepared, ids: ids, shareID: shareID, addressID: addressID,
+                addressKeys: addressKeys, signatureAddress: signatureAddress,
+                signatureEmail: signatureEmail
+            )
+        } catch {
+            // Unstructured on purpose: does not inherit the (possibly
+            // cancelled) upload task, so a pause still removes the draft.
+            _ = await Task {
+                try? await self.deleteDraft(shareID: shareID, parentLinkID: parentLinkID, linkID: ids.linkID)
+            }.value
+            throw error
+        }
+        return (ids.linkID, ids.revisionID, prepared.node)
+    }
+
+    private func uploadBlocksAndCommit(
+        prepared: FileUpload.PreparedUpload,
+        ids: (linkID: String, revisionID: String),
+        shareID: String,
+        addressID: String,
+        addressKeys: [KeyringCache.UnlockedKey],
+        signatureAddress: String?,
+        signatureEmail: String?
+    ) async throws {
         var manifestHashes: [Data] = []
         if !prepared.blocks.isEmpty {
             let links = try await requestBlockUploads(
@@ -261,7 +310,6 @@ actor DriveClient {
             shareID: shareID, linkID: ids.linkID,
             revisionID: ids.revisionID, request: commit
         )
-        return (ids.linkID, ids.revisionID, prepared.node)
     }
 
     // MARK: - file download (F5)
@@ -346,3 +394,5 @@ actor DriveClient {
         try await sessions.withAuth(op)
     }
 }
+
+extension DriveClient: FileDraftAPI {}

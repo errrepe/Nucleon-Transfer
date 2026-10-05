@@ -17,6 +17,8 @@ enum UserFacingError: Sendable {
             switch f {
             case .needsHumanVerification:
                 return humanVerification
+            case .cancelled:
+                return "Upload stopped."
             case let .transient(msg):
                 return message(forMessage: msg)
             case let .permanent(msg):
@@ -51,7 +53,7 @@ enum UserFacingError: Sendable {
                 return "Login setup failed (\(msg)). Check connection and retry once."
             case let .api(code, msg):
                 return message(forCode: code, message: msg)
-            case let .http(status, _, msg):
+            case let .http(status, _, msg, _):
                 // HTTP status drives the guidance (429 / 5xx / 401 share the
                 // envelope-code wording).
                 return message(forCode: status, message: msg)

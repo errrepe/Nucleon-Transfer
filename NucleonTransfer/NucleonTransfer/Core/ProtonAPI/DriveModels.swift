@@ -424,9 +424,14 @@ struct CreateFileRequest: Encodable, Sendable {
     var nodePassphraseSignature: String // detached, signed by address key
     var signatureAddress: String?
     var signatureEmail: String?
+    /// Per-job client UID (F8.2-R3) so a retry can recognise — and delete —
+    /// its own stale draft. Omitted when nil. Field name verified upstream:
+    /// ProtonDriveApps/sdk `FileCreationRequest.cs` `[JsonPropertyName("ClientUID")]`.
+    var clientUID: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case parentLinkID = "ParentLinkID"
+        case clientUID = "ClientUID"
         case name = "Name"
         case hash = "Hash"
         case mimeType = "MIMEType"
@@ -452,6 +457,7 @@ struct CreateFileRequest: Encodable, Sendable {
         try c.encode(nodePassphraseSignature, forKey: .nodePassphraseSignature)
         try c.encodeIfPresent(signatureAddress, forKey: .signatureAddress)
         try c.encodeIfPresent(signatureEmail, forKey: .signatureEmail)
+        try c.encodeIfPresent(clientUID, forKey: .clientUID)
     }
 }
 

@@ -49,6 +49,48 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
     var updatedAt: Date
     /// Remote LinkID after a successful upload.
     var remoteLinkID: String?
+    /// Per-job ClientUID sent with the file draft (F8.2-R3): lets a retry
+    /// recognise its own stale draft in checkAvailableHashes' PendingHashes.
+    var clientUID: String?
+    /// Draft LinkID/RevisionID of the attempt in progress (persisted as soon
+    /// as the draft exists; cleared on success) — a relaunch deletes it.
+    var draftLinkID: String?
+    var draftRevisionID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, fileName, relativePath, localPath, localBookmark, shareID,
+             parentLinkID, state, bytesTotal, bytesDone, attempt, maxAttempts,
+             errorMessage, createdAt, updatedAt, remoteLinkID,
+             clientUID, draftLinkID, draftRevisionID
+    }
+
+    /// Tolerant decode (F8.2-R2): only the identity/destination fields are
+    /// required; everything else defaults, and an unknown state (written by
+    /// a newer build) parks the job as `.paused` instead of dropping it.
+    /// Fields added later MUST be decoded with `decodeIfPresent`.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        fileName = try c.decode(String.self, forKey: .fileName)
+        localPath = try c.decode(String.self, forKey: .localPath)
+        shareID = try c.decode(String.self, forKey: .shareID)
+        parentLinkID = try c.decode(String.self, forKey: .parentLinkID)
+        relativePath = try c.decodeIfPresent(String.self, forKey: .relativePath) ?? fileName
+        localBookmark = try? c.decodeIfPresent(Data.self, forKey: .localBookmark)
+        let rawState = try c.decodeIfPresent(String.self, forKey: .state)
+        state = rawState.flatMap(TransferJobState.init(rawValue:)) ?? .paused
+        bytesTotal = try c.decodeIfPresent(Int64.self, forKey: .bytesTotal) ?? 0
+        bytesDone = try c.decodeIfPresent(Int64.self, forKey: .bytesDone) ?? 0
+        attempt = try c.decodeIfPresent(Int.self, forKey: .attempt) ?? 0
+        maxAttempts = try c.decodeIfPresent(Int.self, forKey: .maxAttempts) ?? 5
+        errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        createdAt = (try? c.decodeIfPresent(Date.self, forKey: .createdAt)) ?? Date()
+        updatedAt = (try? c.decodeIfPresent(Date.self, forKey: .updatedAt)) ?? Date()
+        remoteLinkID = try c.decodeIfPresent(String.self, forKey: .remoteLinkID)
+        clientUID = try c.decodeIfPresent(String.self, forKey: .clientUID)
+        draftLinkID = try c.decodeIfPresent(String.self, forKey: .draftLinkID)
+        draftRevisionID = try c.decodeIfPresent(String.self, forKey: .draftRevisionID)
+    }
 
     var progress: Double {
         guard bytesTotal > 0 else { return state == .done ? 1 : 0 }
@@ -80,6 +122,7 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
         self.maxAttempts = maxAttempts
         createdAt = Date()
         updatedAt = Date()
+        clientUID = UUID().uuidString
     }
 }
 
@@ -94,6 +137,11 @@ enum TransferFailure: Error, Sendable, Equatable {
     case permanent(String)
     /// Proton HV 9001 — pause the whole queue, resume manually.
     case needsHumanVerification
+    /// The upload was cancelled (Task cancellation, `URLError.cancelled`,
+    /// possibly wrapped in `ProtonAPIError.transport`). Never a failure:
+    /// whoever cancelled (pause / cancel / remove / sign-out) already set
+    /// the job's state (F8.2-R1).
+    case cancelled
 }
 
 enum TransferErrorClassify {
@@ -101,6 +149,7 @@ enum TransferErrorClassify {
     /// retry loops must be opt-in (transient), never the default.
     static func classify(_ error: Error) -> TransferFailure {
         if let f = error as? TransferFailure { return f }
+        if isCancellation(error) { return .cancelled }
         if let api = error as? ProtonAPIError {
             switch api {
             case .humanVerificationRequired:
@@ -112,6 +161,12 @@ enum TransferErrorClassify {
                     return .transient("api \(code): \(message)")
                 }
                 return .permanent("api \(code): \(message)")
+            case let .http(status, _, message, _):
+                // F8.2-R3: classify on the HTTP status (storage + API).
+                if APIClient.isRetryableStatus(status) {
+                    return .transient("http \(status): \(message)")
+                }
+                return .permanent("http \(status): \(message)")
             case .rateLimited:
                 // Login-rate-limit shape reused defensively: surface, don't spin.
                 return .permanent("rate limited")
@@ -134,6 +189,32 @@ enum TransferErrorClassify {
         }
         return .permanent(error.localizedDescription)
     }
+
+    /// Server-requested wait (`Retry-After`, seconds) carried by `error`,
+    /// looking through `ProtonAPIError.transport` wrapping.
+    static func retryAfter(_ error: Error) -> TimeInterval? {
+        guard let api = error as? ProtonAPIError else { return nil }
+        switch api {
+        case let .http(_, _, _, retryAfter): return retryAfter
+        case let .transport(underlying): return self.retryAfter(underlying)
+        default: return nil
+        }
+    }
+
+    /// True for every shape a cancelled upload surfaces as: Swift
+    /// `CancellationError`, `URLError(.cancelled)` / NSURLErrorCancelled,
+    /// and either of those wrapped in `ProtonAPIError.transport`
+    /// (APIClient.data(for:) wraps every URLSession error).
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let f = error as? TransferFailure { return f == .cancelled }
+        if let api = error as? ProtonAPIError {
+            if case let .transport(underlying) = api { return isCancellation(underlying) }
+            return false
+        }
+        let ns = error as NSError
+        return ns.domain == (NSURLErrorDomain as String) && ns.code == NSURLErrorCancelled
+    }
 }
 
 // MARK: - Retry policy (pure)
@@ -145,13 +226,24 @@ enum TransferRetryPolicy: Sendable {
     static let capNanoseconds: UInt64 = 60_000_000_000
     static let maxJitterNanoseconds: UInt64 = 1_000_000_000
 
-    static func delayNanoseconds(failures: Int, jitter: UInt64 = 0) -> UInt64 {
+    /// Longest server-requested wait honoured (a hostile/buggy header must
+    /// not park a slot for hours); 5 minutes.
+    static let retryAfterCapNanoseconds: UInt64 = 300_000_000_000
+
+    /// `retryAfter` (seconds, from the server's `Retry-After`) raises the
+    /// delay to at least that long (capped at `retryAfterCapNanoseconds`),
+    /// jitter still added on top so parallel jobs don't stampede.
+    static func delayNanoseconds(failures: Int, jitter: UInt64 = 0, retryAfter: TimeInterval? = nil) -> UInt64 {
         let n = max(1, failures)
         // 2^(n-1), saturated before the shift can overflow.
         let shift = min(n - 1, 10)
         let exponential = baseNanoseconds << shift
-        let capped = min(capNanoseconds, exponential)
-        return capped + min(jitter, maxJitterNanoseconds)
+        var base = min(capNanoseconds, exponential)
+        if let retryAfter, retryAfter > 0 {
+            let requested = min(Double(retryAfterCapNanoseconds), retryAfter * 1_000_000_000)
+            base = max(base, UInt64(requested))
+        }
+        return base + min(jitter, maxJitterNanoseconds)
     }
 
     static func randomJitter() -> UInt64 {
@@ -169,6 +261,41 @@ protocol TransferUploader: Sendable {
         job: TransferJob,
         progress: @Sendable (Int64) async -> Void
     ) async throws -> String?
+
+    /// Same, plus side-channel events the queue persists (draft IDs,
+    /// refreshed bookmark). Defaults to the two-argument form.
+    func upload(
+        job: TransferJob,
+        progress: @Sendable (Int64) async -> Void,
+        events: TransferUploadEvents
+    ) async throws -> String?
+}
+
+extension TransferUploader {
+    func upload(
+        job: TransferJob,
+        progress: @Sendable (Int64) async -> Void,
+        events: TransferUploadEvents
+    ) async throws -> String? {
+        try await upload(job: job, progress: progress)
+    }
+}
+
+/// Callbacks an uploader fires mid-job so the queue can persist state that
+/// must survive a crash/relaunch.
+struct TransferUploadEvents: Sendable {
+    /// The remote draft exists (F8.2-R3): LinkID + RevisionID.
+    var draftCreated: @Sendable (_ linkID: String, _ revisionID: String) async -> Void
+    /// The job's bookmark was stale and has been re-created (F8.2-R4).
+    var bookmarkRefreshed: @Sendable (_ bookmark: Data) async -> Void
+
+    init(
+        draftCreated: @escaping @Sendable (_ linkID: String, _ revisionID: String) async -> Void = { _, _ in },
+        bookmarkRefreshed: @escaping @Sendable (_ bookmark: Data) async -> Void = { _ in }
+    ) {
+        self.draftCreated = draftCreated
+        self.bookmarkRefreshed = bookmarkRefreshed
+    }
 }
 
 /// Creates (or returns the existing) remote folder under a parent.
@@ -186,19 +313,38 @@ protocol RemoteFolderCreator: Sendable {
 /// - Concurrency: at most `maxConcurrentUploads` jobs in flight (default 3;
 ///   each job uploads sequentially — DriveClient.uploadFile's verified path —
 ///   so per-job block parallelism stays deferred, TRANSFERS.md §1.5).
+/// - Scheduling: FIFO of queued ids (F8.2-R2) — a completion pops the next
+///   id instead of scanning every job.
 /// - Retry: transient errors back off in-slot (the slot is held during the
 ///   sleep); pause/cancel win over a pending retry.
+/// - Persistence (F8.2-R2): coalesced. Progress marks the snapshot dirty and
+///   a trailing save runs within `saveDebounceNanoseconds` (~500 ms); state
+///   transitions save at once unless a save already ran inside that window
+///   (then the trailing save covers them). `flush()` writes synchronously
+///   (app quit). Listener snapshots are coalesced the same way (~100 ms).
 /// - Backoff sleeping is injectable (`sleeper`) so tests never wait.
 /// - No uploader set (pre-login) → jobs accumulate `queued`; `start()` pumps.
 actor TransferQueue {
     private var jobs: [UUID: TransferJob] = [:]
-    /// Insertion order (stable UI listing + FIFO scheduling).
+    /// Insertion order (stable UI listing).
     private var order: [UUID] = []
-    private var inFlight: Set<UUID> = []
+    /// Ids waiting for a slot, oldest first. Entries go stale when a job
+    /// is paused/cancelled/removed — `pump` skips them lazily; an id can
+    /// appear twice (resume of a still-listed job) and is started once.
+    private var fifo: [UUID] = []
+    private var fifoHead = 0
+    /// Live runs: job ID → generation token of the ONE run that owns the
+    /// slot. A run keeps its slot until its task actually returns — even
+    /// after pause/cancel/remove cancelled it (the uploader may take a
+    /// while to notice) — so concurrency never exceeds the limit and an id
+    /// is never re-pumped while its previous run is still unwinding
+    /// (F8.2-R1). `inFlight.count` is the number of occupied slots.
+    private var inFlight: [UUID: UInt64] = [:]
     private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var nextGeneration: UInt64 = 0
     private var uploader: (any TransferUploader)?
-    private let storeURL: URL?
-    /// UI hook: receives full snapshots (UI throttles/observes as it likes).
+    private let store: (any TransferQueueStore)?
+    /// UI hook: receives full snapshots (coalesced to ~100 ms).
     var listener: (@Sendable ([TransferJob]) -> Void)?
 
     var maxConcurrentUploads: Int
@@ -207,27 +353,51 @@ actor TransferQueue {
         try? await Task.sleep(nanoseconds: ns)
     }
 
+    // Coalesced persistence / notification.
+    var saveDebounceNanoseconds: UInt64 = 500_000_000
+    var notifyIntervalNanoseconds: UInt64 = 100_000_000
+    /// Clock for the coalescing windows (injectable for tests).
+    var now: @Sendable () -> Date = { Date() }
+    private var dirty = false
+    private var saveScheduled = false
     private var lastSave = Date.distantPast
+    private var notifyScheduled = false
     private var lastNotify = Date.distantPast
+    /// True when the loaded snapshot was lossy: the next write first copies
+    /// the original file to `.bak`.
+    private var needsBackup = false
+    /// Snapshot writes performed (diagnostics + tests).
+    private(set) var saveCount = 0
 
     init(
         storeURL: URL? = nil,
         uploader: (any TransferUploader)? = nil,
         maxConcurrentUploads: Int = 3
     ) {
-        self.storeURL = storeURL
+        self.init(
+            store: storeURL.map { FileTransferQueueStore(url: $0) as any TransferQueueStore },
+            uploader: uploader,
+            maxConcurrentUploads: maxConcurrentUploads
+        )
+    }
+
+    init(
+        store: (any TransferQueueStore)?,
+        uploader: (any TransferUploader)? = nil,
+        maxConcurrentUploads: Int = 3
+    ) {
+        self.store = store
         self.uploader = uploader
         self.maxConcurrentUploads = maxConcurrentUploads
-        if let storeURL,
-           let data = try? Data(contentsOf: storeURL),
-           let saved = try? JSONDecoder().decode([TransferJob].self, from: data)
-        {
-            for var job in saved {
-                if job.state == .uploading { job.state = .queued } // resume after relaunch
-                job.updatedAt = Date()
-                jobs[job.id] = job
-                order.append(job.id)
-            }
+        guard let data = store?.read() else { return }
+        let decoded = TransferQueueSnapshot.decode(data)
+        needsBackup = decoded.lossy
+        for var job in decoded.jobs where jobs[job.id] == nil {
+            if job.state == .uploading { job.state = .queued } // resume after relaunch
+            job.updatedAt = Date()
+            jobs[job.id] = job
+            order.append(job.id)
+            if job.state == .queued { fifo.append(job.id) }
         }
     }
 
@@ -250,8 +420,20 @@ actor TransferQueue {
         sleeper = s
     }
 
+    /// Test seam: coalescing windows + clock.
+    func setCoalescing(
+        saveDebounceNanoseconds: UInt64? = nil,
+        notifyIntervalNanoseconds: UInt64? = nil,
+        now: (@Sendable () -> Date)? = nil
+    ) {
+        if let saveDebounceNanoseconds { self.saveDebounceNanoseconds = saveDebounceNanoseconds }
+        if let notifyIntervalNanoseconds { self.notifyIntervalNanoseconds = notifyIntervalNanoseconds }
+        if let now { self.now = now }
+    }
+
     func setMaxConcurrent(_ n: Int) {
         maxConcurrentUploads = n
+        pump()
     }
 
     func setListener(_ l: (@Sendable ([TransferJob]) -> Void)?) {
@@ -261,31 +443,34 @@ actor TransferQueue {
     // MARK: enqueue
 
     func enqueue(_ job: TransferJob) {
-        var j = job
-        j.updatedAt = Date()
-        jobs[j.id] = j
-        if !order.contains(j.id) { order.append(j.id) }
-        save(force: true)
-        notify(force: true)
-        pump()
+        enqueueMany([job])
     }
 
+    /// Adds jobs in one batch: one snapshot write + one notification for
+    /// the whole batch (F8.2-R2 — per-file saves made big drops quadratic).
     func enqueueMany(_ newJobs: [TransferJob]) {
+        guard !newJobs.isEmpty else { return }
+        let stamp = Date()
         for var j in newJobs {
-            j.updatedAt = Date()
+            j.updatedAt = stamp
+            if jobs[j.id] == nil { order.append(j.id) }
             jobs[j.id] = j
-            if !order.contains(j.id) { order.append(j.id) }
+            if j.state == .queued { fifo.append(j.id) }
         }
-        save(force: true)
-        notify(force: true)
+        persist(urgent: true)
+        publish()
         pump()
     }
 
     /// Uploads a scanned local tree: creates remote folders parent→child
     /// (memoized per relative path), then enqueues one job per file with the
-    /// resolved parent LinkID. `rootParentLinkID` is the existing remote
-    /// folder the tree lands in; the scan root itself is never created.
-    /// - Returns: enqueued job IDs (folders return their LinkIDs via `createdFolders`).
+    /// resolved parent LinkID — all files in ONE `enqueueMany`. Entry
+    /// bookmarks (created during the detached scan) travel into the jobs.
+    /// `rootParentLinkID` is the existing remote folder the tree lands in;
+    /// the entry with relativePath "" (the scan root itself) is never
+    /// created — callers that want the dropped folder preserved pass
+    /// entries rooted at its name (`LocalTreeScan.rooted`, F8.2-R6).
+    /// - Returns: enqueued job IDs, in file-entry order.
     @discardableResult
     func enqueueTree(
         entries: [LocalTreeScan.Entry],
@@ -295,13 +480,16 @@ actor TransferQueue {
         maxAttempts: Int = 5
     ) async throws -> [UUID] {
         var remoteByRelPath = ["": rootParentLinkID]
+        func depth(_ rel: String) -> Int {
+            rel.isEmpty ? 0 : rel.utf8.reduce(1) { $1 == UInt8(ascii: "/") ? $0 + 1 : $0 }
+        }
         let dirs = entries.filter(\.isDirectory)
+            .map { (depth: depth($0.relativePath), entry: $0) }
             .sorted {
-                let d0 = $0.relativePath.components(separatedBy: "/").count
-                let d1 = $1.relativePath.components(separatedBy: "/").count
-                if d0 != d1 { return d0 < d1 }
-                return $0.relativePath < $1.relativePath
+                if $0.depth != $1.depth { return $0.depth < $1.depth }
+                return $0.entry.relativePath < $1.entry.relativePath
             }
+            .map(\.entry)
         for dir in dirs where !dir.relativePath.isEmpty {
             let rel = dir.relativePath
             if remoteByRelPath[rel] != nil { continue } // idempotent within a tree
@@ -312,24 +500,24 @@ actor TransferQueue {
             let linkID = try await folders.ensureFolder(name: name, parentLinkID: parent, shareID: shareID)
             remoteByRelPath[rel] = linkID
         }
-        var enqueued: [UUID] = []
-        for file in entries.filter({ !$0.isDirectory }) {
+        var batch: [TransferJob] = []
+        for file in entries where !file.isDirectory {
             let parentRel = (file.relativePath as NSString).deletingLastPathComponent
             let parent = remoteByRelPath[parentRel] ?? rootParentLinkID
             let name = (file.relativePath as NSString).lastPathComponent
-            let job = TransferJob(
+            batch.append(TransferJob(
                 fileName: name,
                 relativePath: file.relativePath,
                 localPath: file.url.path,
+                localBookmark: file.bookmark,
                 shareID: shareID,
                 parentLinkID: parent,
                 bytesTotal: file.size,
                 maxAttempts: maxAttempts
-            )
-            enqueue(job)
-            enqueued.append(job.id)
+            ))
         }
-        return enqueued
+        enqueueMany(batch)
+        return batch.map(\.id)
     }
 
     // MARK: operators
@@ -340,12 +528,12 @@ actor TransferQueue {
 
     func job(id: UUID) -> TransferJob? { jobs[id] }
 
-    /// Attaches a security-scoped bookmark after enqueue (live UI only).
+    /// Attaches (or refreshes) a job's security-scoped bookmark.
     func setBookmark(id: UUID, _ bookmark: Data?) {
         guard var j = jobs[id] else { return }
         j.localBookmark = bookmark
         jobs[id] = j
-        save(force: true)
+        persist()
     }
 
     /// Pumps queued jobs into free slots. No-op pre-login (no uploader).
@@ -359,14 +547,15 @@ actor TransferQueue {
             j.updatedAt = Date()
             jobs[id] = j
             tasks[id]?.cancel()
+            persist(urgent: true)
+            publish()
         case .paused, .done, .failed, .cancelled:
             break
         }
-        save(force: true)
-        notify(force: true)
     }
 
     func pauseAll() {
+        var touched = false
         for id in order {
             guard var j = jobs[id] else { continue }
             if j.state == .queued || j.state == .uploading {
@@ -374,10 +563,13 @@ actor TransferQueue {
                 j.updatedAt = Date()
                 jobs[id] = j
                 tasks[id]?.cancel()
+                touched = true
             }
         }
-        save(force: true)
-        notify(force: true)
+        if touched {
+            persist(urgent: true)
+            publish()
+        }
     }
 
     func resume(id: UUID) {
@@ -386,8 +578,9 @@ actor TransferQueue {
         j.errorMessage = nil
         j.updatedAt = Date()
         jobs[id] = j
-        save(force: true)
-        notify(force: true)
+        fifo.append(id)
+        persist(urgent: true)
+        publish()
         pump()
     }
 
@@ -399,11 +592,11 @@ actor TransferQueue {
             j.updatedAt = Date()
             jobs[id] = j
             tasks[id]?.cancel()
+            persist(urgent: true)
+            publish()
         case .done, .cancelled:
             break
         }
-        save(force: true)
-        notify(force: true)
     }
 
     /// Relaunch: failed/cancelled → fresh queued job (attempt + progress reset;
@@ -411,47 +604,52 @@ actor TransferQueue {
     func relaunch(id: UUID) {
         guard var j = jobs[id] else { return }
         guard j.state == .failed || j.state == .cancelled else { return }
+        Self.resetForRelaunch(&j)
+        jobs[id] = j
+        fifo.append(id)
+        persist(urgent: true)
+        publish()
+        pump()
+    }
+
+    /// Relaunches every FAILED job (UI "retry all"). User-cancelled jobs
+    /// are left alone — only an explicit per-row relaunch restarts them.
+    func relaunchAllFailed() {
+        var touched = false
+        for id in order {
+            guard var j = jobs[id], j.state == .failed else { continue }
+            Self.resetForRelaunch(&j)
+            jobs[id] = j
+            fifo.append(id)
+            touched = true
+        }
+        if touched {
+            persist(urgent: true)
+            publish()
+            pump()
+        }
+    }
+
+    private static func resetForRelaunch(_ j: inout TransferJob) {
         j.state = .queued
         j.attempt = 0
         j.bytesDone = 0
         j.errorMessage = nil
         j.remoteLinkID = nil
         j.updatedAt = Date()
-        jobs[id] = j
-        save(force: true)
-        notify(force: true)
-        pump()
     }
 
-    /// Relaunches every failed job (UI "retry all").
-    func relaunchAllFailed() {
-        var touched = false
-        for id in order {
-            guard var j = jobs[id], j.state == .failed else { continue }
-            j.state = .queued
-            j.attempt = 0
-            j.bytesDone = 0
-            j.errorMessage = nil
-            j.remoteLinkID = nil
-            j.updatedAt = Date()
-            jobs[id] = j
-            touched = true
-        }
-        if touched {
-            save(force: true)
-            notify(force: true)
-            pump()
-        }
-    }
-
+    /// Drops the job. A running upload is cancelled but keeps its slot
+    /// (`inFlight`) until its task really returns — releasing it here let
+    /// the pump start another upload while this one was still unwinding,
+    /// exceeding the concurrency limit (F8.2-R1).
     func remove(id: UUID) {
         tasks[id]?.cancel()
-        tasks[id] = nil
-        inFlight.remove(id)
+        guard jobs[id] != nil else { return }
         jobs[id] = nil
         order.removeAll { $0 == id }
-        save(force: true)
-        notify(force: true)
+        persist(urgent: true)
+        publish()
         pump()
     }
 
@@ -459,55 +657,121 @@ actor TransferQueue {
         guard var j = jobs[id], j.state == .uploading else { return }
         j.bytesDone = min(max(0, bytes), j.bytesTotal)
         jobs[id] = j
-        save() // throttled; forced on state transitions
-        notify() // throttled ~100ms (TRANSFERS.md §4)
+        persist() // coalesced (~500 ms)
+        publish() // coalesced (~100 ms, TRANSFERS.md §4)
     }
 
     // MARK: scheduler
 
-    private func pump() {
-        guard let uploader else { return }
-        while inFlight.count < maxConcurrentUploads {
-            guard let next = order.compactMap({ jobs[$0] }).first(where: { $0.state == .queued }) else { break }
-            jobs[next.id]?.state = .uploading
-            jobs[next.id]?.updatedAt = Date()
-            inFlight.insert(next.id)
-            let id = next.id
-            tasks[id] = Task { await self.run(id: id, uploader: uploader) }
+    /// Next startable queued id (FIFO), skipping stale entries.
+    private func popQueued() -> UUID? {
+        while fifoHead < fifo.count {
+            let id = fifo[fifoHead]
+            fifoHead += 1
+            // An id whose previous run is still unwinding (paused then
+            // resumed fast) is skipped: that run's exit re-queues it.
+            if jobs[id]?.state == .queued, inFlight[id] == nil { return id }
         }
-        save(force: true)
-        notify(force: true)
+        return nil
     }
 
-    private func run(id: UUID, uploader: any TransferUploader) async {
+    private func compactFIFO() {
+        if fifoHead == fifo.count {
+            fifo.removeAll(keepingCapacity: true)
+            fifoHead = 0
+        } else if fifoHead > 1024, fifoHead * 2 > fifo.count {
+            fifo.removeFirst(fifoHead)
+            fifoHead = 0
+        }
+    }
+
+    private func pump() {
+        guard let uploader else { return }
+        var started = false
+        while inFlight.count < maxConcurrentUploads, let id = popQueued() {
+            jobs[id]?.state = .uploading
+            jobs[id]?.updatedAt = Date()
+            nextGeneration &+= 1
+            let generation = nextGeneration
+            inFlight[id] = generation
+            tasks[id] = Task { await self.run(id: id, generation: generation, uploader: uploader) }
+            started = true
+        }
+        compactFIFO()
+        if started {
+            persist(urgent: true)
+            publish()
+        }
+    }
+
+    /// True while `generation` is still the run that owns `id`'s slot.
+    /// Every write a run makes is gated on this (plus a state check), so a
+    /// stale run can never touch a newer run's job, task or slot.
+    private func owns(_ id: UUID, _ generation: UInt64) -> Bool {
+        inFlight[id] == generation
+    }
+
+    private func run(id: UUID, generation: UInt64, uploader: any TransferUploader) async {
         defer {
-            tasks[id] = nil
-            inFlight.remove(id)
-            save(force: true)
-            notify(force: true)
+            if owns(id, generation) {
+                inFlight[id] = nil
+                tasks[id] = nil
+                // Resumed while this run was unwinding: back in line.
+                if jobs[id]?.state == .queued { fifo.append(id) }
+            }
+            persist(urgent: true)
+            publish()
             pump()
         }
-        guard let first = jobs[id], first.state == .uploading else { return }
+        guard owns(id, generation), var first = jobs[id], first.state == .uploading else { return }
+        if first.clientUID == nil { // jobs persisted before F8.2-R3
+            first.clientUID = UUID().uuidString
+            jobs[id] = first
+        }
         var job = first
+        let events = TransferUploadEvents(
+            draftCreated: { [self] linkID, revisionID in
+                await self.recordDraft(id: id, generation: generation, linkID: linkID, revisionID: revisionID)
+            },
+            bookmarkRefreshed: { [self] bookmark in
+                await self.recordBookmark(id: id, generation: generation, bookmark: bookmark)
+            }
+        )
         // Attempt loop: transient failures back off in-slot; pause/cancel win.
         while true {
             do {
                 let linkID = try await uploader.upload(
                     job: job,
-                    progress: { [self] done in await self.reportProgress(id: id, bytes: done) }
+                    progress: { [self] done in await self.reportProgress(id: id, bytes: done) },
+                    events: events
                 )
-                guard var done = jobs[id], done.state == .uploading else { return }
+                // The server committed the file. Record it even if the job
+                // was paused (or paused+resumed) meanwhile: discarding the
+                // success would make the next run upload it a second time.
+                // A removed job stays removed.
+                guard owns(id, generation), var done = jobs[id] else { return }
                 done.state = .done
                 done.bytesDone = done.bytesTotal
                 done.remoteLinkID = linkID
+                done.draftLinkID = nil
+                done.draftRevisionID = nil
                 done.errorMessage = nil
                 done.updatedAt = Date()
                 jobs[id] = done
                 return
-            } catch is CancellationError {
-                return // canceller already set paused/cancelled
             } catch {
-                switch TransferErrorClassify.classify(error) {
+                // Whoever stopped this job (pause / cancel / remove /
+                // sign-out) already set its state: a late error from the
+                // aborted upload must never overwrite it with `.failed`.
+                guard owns(id, generation), jobs[id]?.state == .uploading else { return }
+                let failure = TransferErrorClassify.classify(error)
+                switch failure {
+                case .cancelled:
+                    // Cancelled without an operator transition (e.g. the
+                    // system tore the request down): park it, never fail it.
+                    jobs[id]?.state = .paused
+                    jobs[id]?.updatedAt = Date()
+                    return
                 case .needsHumanVerification:
                     pauseAll() // HV 9001: whole queue pauses (TRANSFERS.md §3)
                     return
@@ -518,7 +782,6 @@ actor TransferQueue {
                     failed.errorMessage = message
                     failed.updatedAt = Date()
                     jobs[id] = failed
-                    job = failed
                     return
                 case let .transient(message):
                     guard var retrying = jobs[id] else { return }
@@ -526,45 +789,120 @@ actor TransferQueue {
                     retrying.errorMessage = message
                     retrying.updatedAt = Date()
                     jobs[id] = retrying
-                    job = retrying
+                    job = retrying // carries the persisted draft IDs into the retry
                     if job.attempt >= job.maxAttempts {
                         jobs[id]?.state = .failed
                         return
                     }
-                    save(force: true)
-                    notify(force: true)
+                    persist(urgent: true)
+                    publish()
                     await sleeper(TransferRetryPolicy.delayNanoseconds(
                         failures: job.attempt,
-                        jitter: TransferRetryPolicy.randomJitter()
+                        jitter: TransferRetryPolicy.randomJitter(),
+                        retryAfter: TransferErrorClassify.retryAfter(error)
                     ))
-                    // Pause/cancel during backoff wins over the retry.
-                    guard jobs[id]?.state == .uploading else { return }
+                    // Pause/cancel/remove during backoff wins over the retry.
+                    guard owns(id, generation), jobs[id]?.state == .uploading,
+                          !Task.isCancelled
+                    else { return }
                 }
             }
         }
     }
 
-    // MARK: persistence (throttled; forced on transitions)
-
-    private func save(force: Bool = false) {
-        guard let storeURL else { return }
-        let now = Date()
-        guard force || now.timeIntervalSince(lastSave) > 1 else { return }
-        lastSave = now
-        let snap = order.compactMap { jobs[$0] }
-        guard let data = try? JSONEncoder().encode(snap) else { return }
-        try? FileManager.default.createDirectory(
-            at: storeURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try? data.write(to: storeURL, options: .atomic)
+    /// Persists the draft the current attempt created (F8.2-R3), so the
+    /// next attempt — even after a crash — can delete it.
+    private func recordDraft(id: UUID, generation: UInt64, linkID: String, revisionID: String) {
+        guard owns(id, generation), var j = jobs[id] else { return }
+        j.draftLinkID = linkID
+        j.draftRevisionID = revisionID
+        jobs[id] = j
+        persist(urgent: true)
     }
 
-    private func notify(force: Bool = false) {
+    /// Persists a re-created (previously stale) bookmark (F8.2-R4).
+    private func recordBookmark(id: UUID, generation: UInt64, bookmark: Data) {
+        guard owns(id, generation), var j = jobs[id] else { return }
+        j.localBookmark = bookmark
+        jobs[id] = j
+        persist(urgent: true)
+    }
+
+    // MARK: persistence (coalesced; F8.2-R2)
+
+    /// Writes any pending snapshot change now (app quit, tests).
+    func flush() {
+        if dirty || needsBackup { writeSnapshot() }
+    }
+
+    /// Marks the snapshot dirty. `urgent` (state transitions) writes at
+    /// once when no save ran within the debounce window; otherwise — and
+    /// always for progress — one trailing save covers everything.
+    private func persist(urgent: Bool = false) {
+        guard store != nil else { return }
+        dirty = true
+        let window = Double(saveDebounceNanoseconds) / 1_000_000_000
+        let elapsed = now().timeIntervalSince(lastSave)
+        if urgent, elapsed >= window {
+            writeSnapshot()
+            return
+        }
+        guard !saveScheduled else { return }
+        saveScheduled = true
+        let wait = UInt64(max(0, window - max(0, elapsed)) * 1_000_000_000)
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: max(wait, 1_000_000))
+            await self?.trailingSave()
+        }
+    }
+
+    private func trailingSave() {
+        saveScheduled = false
+        if dirty { writeSnapshot() }
+    }
+
+    private func writeSnapshot() {
+        guard let store else { return }
+        dirty = false
+        lastSave = now()
+        guard let data = try? TransferQueueSnapshot.encode(order.compactMap { jobs[$0] }) else { return }
+        if needsBackup {
+            // Something in the loaded file could not be decoded: keep the
+            // original next to it before the first overwrite.
+            store.backup()
+            needsBackup = false
+        }
+        try? store.write(data)
+        saveCount += 1
+    }
+
+    /// Delivers a snapshot to the listener, coalesced: immediately when the
+    /// last delivery is older than the interval, else one trailing delivery.
+    private func publish() {
+        guard listener != nil else { return }
+        let window = Double(notifyIntervalNanoseconds) / 1_000_000_000
+        let elapsed = now().timeIntervalSince(lastNotify)
+        if elapsed >= window, !notifyScheduled {
+            deliver()
+            return
+        }
+        guard !notifyScheduled else { return }
+        notifyScheduled = true
+        let wait = UInt64(max(0, window - max(0, elapsed)) * 1_000_000_000)
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: max(wait, 1_000_000))
+            await self?.trailingDeliver()
+        }
+    }
+
+    private func trailingDeliver() {
+        notifyScheduled = false
+        deliver()
+    }
+
+    private func deliver() {
         guard let listener else { return }
-        let now = Date()
-        guard force || now.timeIntervalSince(lastNotify) > 0.1 else { return }
-        lastNotify = now
+        lastNotify = now()
         listener(order.compactMap { jobs[$0] })
     }
 }
