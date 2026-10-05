@@ -50,6 +50,8 @@ struct FolderView: View {
     /// folders show it too.
     @AppStorage(BrowserPreferences.showPathBarKey) private var showPathBar = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The Trash button shows `trash.fill` for a beat after a trash.
+    @State private var trashJustFilled = false
 
     /// This folder's store — observed per folder (F8.3-P3).
     private var state: FolderStore { model.state(for: location) }
@@ -121,6 +123,12 @@ struct FolderView: View {
                     }
                     .help(uploadHelp)
                     .disabled(!model.canUpload)
+                    // Polish pass 4: toolbar symbols answer the action —
+                    // the arrow rises on upload, the "+" pops on a new
+                    // folder, the arrow drops on download. A refused
+                    // upload wiggles like the blocked banner's icon.
+                    .symbolEffect(.bounce.up, value: pulse(model.toolbarPulses.uploads))
+                    .symbolEffect(.wiggle, value: pulse(model.uploadRefusedCount))
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("New Folder", systemImage: "folder.badge.plus") {
@@ -128,6 +136,7 @@ struct FolderView: View {
                     }
                     .help("New Folder")
                     .disabled(!model.root.allowsWrites)
+                    .symbolEffect(.bounce.byLayer, value: pulse(model.toolbarPulses.foldersCreated))
                 }
                 ToolbarSpacer(.fixed, placement: .primaryAction)
                 ToolbarItem(placement: .primaryAction) {
@@ -136,10 +145,15 @@ struct FolderView: View {
                     }
                     .help("Download")
                     .disabled(model.selection.isEmpty)
+                    .symbolEffect(.wiggle.down, value: pulse(model.toolbarPulses.downloads))
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Move to Trash", systemImage: "trash") {
+                    Button {
                         model.requestTrash(model.selection)
+                    } label: {
+                        // The can fills for a beat as the rows leave.
+                        Label("Move to Trash", systemImage: trashJustFilled ? "trash.fill" : "trash")
+                            .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                     }
                     .help("Move to Trash")
                     .disabled(model.selection.isEmpty || !model.root.allowsWrites)
@@ -155,6 +169,18 @@ struct FolderView: View {
             .task(id: location) {
                 await model.load(location)
             }
+            .task(id: model.toolbarPulses.trashes) {
+                guard model.toolbarPulses.trashes > 0 else { return }
+                withAnimation(Motion.snappy) { trashJustFilled = true }
+                try? await Task.sleep(for: .milliseconds(900))
+                withAnimation(Motion.snappy) { trashJustFilled = false }
+            }
+    }
+
+    /// A symbol-effect trigger: the counter, or a constant under Reduce
+    /// Motion (bounce and wiggle are movement).
+    private func pulse(_ counter: Int) -> Int {
+        reduceMotion ? 0 : counter
     }
 
     /// Read-only (Photos), uploads-blocked and refresh-failed banners.

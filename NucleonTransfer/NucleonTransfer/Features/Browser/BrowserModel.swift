@@ -152,6 +152,9 @@ final class BrowserModel {
     /// on each one, so a drop onto an already-visible banner still
     /// answers.
     private(set) var uploadRefusedCount = 0
+    /// Counters the toolbar keys symbol effects on (polish pass 4): each
+    /// bumps once per completed action — never per row or per tick.
+    private(set) var toolbarPulses = ToolbarPulses()
 
     /// An upload attempt while blocked — the banner explains why.
     private func reshowUploadsBlockedBanner() {
@@ -451,6 +454,7 @@ final class BrowserModel {
     func downloadItems(_ ids: Set<DriveItem.ID>) {
         let items = selectedItems(ids)
         guard !items.isEmpty, let downloads = session.downloads else { return }
+        toolbarPulses.downloads += 1
         Task { await downloads.download(items) }
     }
 
@@ -483,6 +487,7 @@ final class BrowserModel {
         }
         guard canUpload, !urls.isEmpty, let uploads = session.uploads else { return }
         let breadcrumb = ancestors(of: destination).map(\.name).joined(separator: " › ")
+        toolbarPulses.uploads += 1
         await uploads.upload(urls: urls, to: destination, breadcrumb: breadcrumb)
     }
 
@@ -508,6 +513,7 @@ final class BrowserModel {
         }
         let linkID = try await ops.createFolder(name: name, in: current)
         animatesNextListing.insert(current.linkID)
+        toolbarPulses.foldersCreated += 1
         await load(current, force: true)
         selection = [linkID]
     }
@@ -556,6 +562,7 @@ final class BrowserModel {
             store.items.removeAll { removed.contains($0.id) }
         }
         selection.subtract(ids)
+        toolbarPulses.trashes += 1
         do {
             try await ops.trash(items, in: loc)
             loadGate.finishRemoval(handle, folder: loc.linkID, succeeded: true)
@@ -565,6 +572,14 @@ final class BrowserModel {
             actionError = UserFacingError.message(for: error)
         }
     }
+}
+
+/// See `BrowserModel.toolbarPulses`.
+struct ToolbarPulses: Equatable {
+    var uploads = 0
+    var downloads = 0
+    var foldersCreated = 0
+    var trashes = 0
 }
 
 #if DEBUG

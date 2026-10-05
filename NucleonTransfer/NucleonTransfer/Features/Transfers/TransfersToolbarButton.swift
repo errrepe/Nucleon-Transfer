@@ -16,7 +16,8 @@
 // so the badge change is noticed without a persistent animation. Pass 3:
 // it also bounces when a transfer starts while the popover is closed
 // ("Open Transfers when a transfer starts" off) — like Safari's
-// downloads button.
+// downloads button. Pass 4: when the last transfer finishes with nothing
+// failed, the icon turns into a checkmark for a beat, then back.
 import AppKit
 import SwiftUI
 
@@ -29,6 +30,8 @@ struct TransfersToolbarButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Advances when a transfer starts with the popover closed.
     @State private var startBounces = 0
+    /// True for a beat after everything finished cleanly.
+    @State private var showsAllDone = false
 
     private var badgeState: TransferBadge {
         TransferDisplay.badge(
@@ -42,7 +45,8 @@ struct TransfersToolbarButton: View {
         Button {
             activity.presentTransfers.toggle()
         } label: {
-            Label("Transfers", systemImage: "arrow.up.arrow.down")
+            Label("Transfers", systemImage: showsAllDone ? "checkmark.circle" : "arrow.up.arrow.down")
+                .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 .symbolEffect(.pulse, options: .repeating, isActive: isInFlight)
                 .symbolEffect(.bounce, value: reduceMotion ? 0 : failedCount)
                 .symbolEffect(.bounce, value: reduceMotion ? 0 : startBounces)
@@ -52,6 +56,16 @@ struct TransfersToolbarButton: View {
         .onChange(of: activity.transfersStarted) {
             // The popover opening already shows the start.
             if !activity.presentTransfers { startBounces += 1 }
+        }
+        .onChange(of: isInFlight) { wasInFlight, inFlight in
+            // A new transfer during the beat takes the icon back at once.
+            let allDone = wasInFlight && !inFlight && failedCount == 0
+            withAnimation(Motion.snappy) { showsAllDone = allDone }
+        }
+        .task(id: showsAllDone) {
+            guard showsAllDone else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            withAnimation(Motion.snappy) { showsAllDone = false }
         }
         // M4: match the View-menu wording ("Show Transfers") and say
         // what the button does; the active/failed count rides along. The
