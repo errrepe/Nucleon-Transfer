@@ -76,6 +76,17 @@ struct CryptoVectorsTests {
         #expect(String(data: v3, encoding: .utf8) == "$2y$10$abcdefghijklmnopqrstuunYspUDVwxKwnshT7FzjzjwI57RV2KKa")
     }
 
+    @Test(arguments: [
+        // jBCrypt TestBCrypt canonical vectors (cost 6).
+        ("a", "$2a$06$m0CrhHm10qJ3lXRY.5zDGO", "$2a$06$m0CrhHm10qJ3lXRY.5zDGO3rS2KdeeWLuGmsfGlMfOxih58VYVfxe"),
+        ("abcdefghijklmnopqrstuvwxyz", "$2a$06$.rCVZVOThsIa97pEDOxvGu",
+         "$2a$06$.rCVZVOThsIa97pEDOxvGuRRgzG64bvtJ0938xuqzv18d3ZpQhstC"),
+    ])
+    func bcryptCanonicalVectors(password: String, salt: String, expected: String) throws {
+        let out = try ProtonBcryptHasher().hash(password: Data(password.utf8), dotSlashSalt: salt)
+        #expect(String(decoding: out, as: UTF8.self) == expected)
+    }
+
     @Test func s2kIteratedSHA256() throws {
         // Iterated (t=3), SHA-256, 8-byte salt, count 65536 (0x60).
         // Reference: independent Python implementation.
