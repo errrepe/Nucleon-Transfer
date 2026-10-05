@@ -58,8 +58,16 @@ struct EncryptRecipient: Sendable {
 /// New-format packet framing (RFC 4880 §4): header + definite length.
 enum PGPPacketsEncode {
     static func packet(tag: Int, body: Data) -> Data {
+        var out = header(tag: tag, length: body.count)
+        out.reserveCapacity(out.count + body.count)
+        out.append(body)
+        return out
+    }
+
+    /// Tag octet + definite length for a body of `length` bytes (lets large
+    /// bodies be written straight after it without a framing copy).
+    static func header(tag: Int, length n: Int) -> Data {
         var out = Data([UInt8(0xC0 | (tag & 0x3F))])
-        let n = body.count
         if n < 192 {
             out.append(UInt8(n))
         } else if n < 8384 {
@@ -73,7 +81,6 @@ enum PGPPacketsEncode {
             out.append(UInt8((n >> 8) & 0xFF))
             out.append(UInt8(n & 0xFF))
         }
-        out.append(body)
         return out
     }
 }
@@ -84,15 +91,24 @@ enum LiteralPacket {
     /// carry a real modification date — zeros are a needless divergence, so
     /// default to now (override for deterministic vectors).
     static func build(data: Data, filename: String = "", date: UInt32 = UInt32(Date().timeIntervalSince1970)) -> Data {
+        var out = header(dataCount: data.count, filename: filename, date: date)
+        out.reserveCapacity(out.count + data.count)
+        out.append(data)
+        return out
+    }
+
+    /// Everything `build` emits before the data: tag 11 framing + format,
+    /// filename and date. `header + data == build(data)` (F8.3-P1: the
+    /// block encrypt streams header and data without concatenating them).
+    static func header(dataCount: Int, filename: String = "", date: UInt32 = UInt32(Date().timeIntervalSince1970)) -> Data {
         let nameBytes = Array(filename.utf8.prefix(255))
-        var body = Data([0x62, UInt8(nameBytes.count)])
-        body.append(contentsOf: nameBytes)
-        body.append(UInt8((date >> 24) & 0xFF))
-        body.append(UInt8((date >> 16) & 0xFF))
-        body.append(UInt8((date >> 8) & 0xFF))
-        body.append(UInt8(date & 0xFF))
-        body.append(data)
-        return PGPPacketsEncode.packet(tag: 11, body: body)
+        var fields = Data([0x62, UInt8(nameBytes.count)])
+        fields.append(contentsOf: nameBytes)
+        fields.append(UInt8((date >> 24) & 0xFF))
+        fields.append(UInt8((date >> 16) & 0xFF))
+        fields.append(UInt8((date >> 8) & 0xFF))
+        fields.append(UInt8(date & 0xFF))
+        return PGPPacketsEncode.header(tag: 11, length: fields.count + dataCount) + fields
     }
 }
 

@@ -131,19 +131,19 @@ enum FileUpload {
     /// RAW tag-18 packet (the storage body; its count is the wire `Size`).
     static func encryptBlock(_ plaintext: Data, contentKey: Data) throws -> Data {
         guard contentKey.count == sessionKeyLength else { throw FileUploadError.badContentKeyLength }
-        let literal = LiteralPacket.build(data: plaintext, filename: "")
-        let sedBody = try SEDEncrypt.encrypt(
-            inner: literal, sessionKey: contentKey,
-            symAlgoID: sessionCipher, useMDC: true
+        // Literal header + data streamed through the cipher unjoined, framed
+        // in one buffer (F8.3-P1): no plaintext/packet copies.
+        let literalHeader = LiteralPacket.header(dataCount: plaintext.count, filename: "")
+        return try SEDEncrypt.seipdPacket(
+            innerParts: [literalHeader, plaintext], sessionKey: contentKey, symAlgoID: sessionCipher
         )
-        return PGPPacketsEncode.packet(tag: 18, body: sedBody)
     }
 
     /// Decrypts a raw encrypted block packet with the content session key
     /// (inverse of encryptBlock; used by tests and the F4.4 download path).
     static func decryptBlock(_ packet: Data, contentKey: Data) throws -> Data {
         guard contentKey.count == sessionKeyLength else { throw FileUploadError.badContentKeyLength }
-        let packets = try PGPPackets.parse(packet)
+        let packets = try PGPPackets.parseSlices(packet) // body decrypted in place, no copy
         guard let sedBody = packets.first(where: { $0.tag == 18 }).map(\.body) else {
             throw FileUploadError.badContentKeyPacket
         }
