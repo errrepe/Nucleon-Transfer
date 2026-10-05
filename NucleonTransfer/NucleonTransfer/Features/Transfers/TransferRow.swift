@@ -4,6 +4,11 @@
 // in-flight rows. Action buttons are icon-only per spec 6.2 — the same
 // per-state set the retired queue view had (Pause/Resume/Cancel/Retry/
 // Remove) plus "Show in Finder" for completed downloads.
+// F8.4-U6/U8: failed rows show the full error on hover and via "Show
+// Details…" (alert with Copy); failure/cancellation carry an SF Symbol
+// beside the subtitle (never color alone); VoiceOver reads each row as ONE
+// element (name + status) whose buttons are exposed as named actions.
+import AppKit
 import SwiftUI
 
 /// Icon-only action set for a row: one closure per possible button, nil =
@@ -22,6 +27,7 @@ struct TransferRowActions {
 struct TransferRow: View {
     let item: TransferDisplayItem
     var actions = TransferRowActions()
+    @State private var showDetails = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -36,14 +42,24 @@ struct TransferRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .help(item.name)
-                Text(item.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(item.isFailed ? .red : .secondary)
-                    .lineLimit(2)
-                    .monospacedDigit() // "Downloading… 45%" ticks up
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    if let symbol = item.statusSymbol {
+                        Image(systemName: symbol)
+                            .imageScale(.small)
+                    }
+                    Text(item.subtitle)
+                        .lineLimit(2)
+                        .monospacedDigit() // "42% · 3.2 MB/s" ticks up
+                }
+                .font(.caption)
+                .foregroundStyle(item.isFailed ? .red : .secondary)
+                // Full text on hover: errors truncate at two lines.
+                .help(item.subtitle)
                 if let progress = item.progress {
                     ProgressView(value: progress)
                         .controlSize(.small)
+                        .accessibilityLabel("\(item.name) progress")
+                        .accessibilityValue(item.progressText ?? "")
                 }
             }
             Spacer(minLength: 4)
@@ -51,6 +67,31 @@ struct TransferRow: View {
         }
         .padding(.vertical, 2)
         .contextMenu { contextActions }
+        // One VoiceOver stop per row: name + status/progress, buttons as
+        // named actions (rotor "Actions") instead of separate stops.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(item.name)
+        .accessibilityValue(item.accessibilityValue)
+        .accessibilityActions { contextActions }
+        .alert(detailsTitle, isPresented: $showDetails) {
+            Button("Copy") { copyDetails() }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(item.subtitle)
+        }
+    }
+
+    private var detailsTitle: String {
+        switch item.direction {
+        case .upload: return String(localized: "Couldn’t Upload “\(item.name)”")
+        case .download: return String(localized: "Couldn’t Download “\(item.name)”")
+        }
+    }
+
+    private func copyDetails() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(item.subtitle, forType: .string)
     }
 
     /// Same actions as the icon buttons, as text items (F8.2-R5: "Cancel"
@@ -60,6 +101,7 @@ struct TransferRow: View {
         if let pause = actions.pause { Button("Pause", action: pause) }
         if let resume = actions.resume { Button("Resume", action: resume) }
         if let retry = actions.retry { Button("Retry", action: retry) }
+        if item.isFailed { Button("Show Details…") { showDetails = true } }
         if let reveal = actions.reveal { Button("Show in Finder", action: reveal) }
         if let cancel = actions.cancel { Button("Cancel", action: cancel) }
         if let remove = actions.remove { Button("Remove", action: remove) }
@@ -90,7 +132,7 @@ struct TransferRow: View {
     }
 
     private func rowButton(
-        _ label: String, systemImage: String, action: @escaping () -> Void
+        _ label: LocalizedStringKey, systemImage: String, action: @escaping () -> Void
     ) -> some View {
         Button(label, systemImage: systemImage, action: action)
             .labelStyle(.iconOnly)
@@ -125,6 +167,13 @@ struct TransferRow: View {
         TransferRow(
             item: TransferDisplay.item(for: PreviewFixtures.downloadRecords[1]),
             actions: TransferRowActions(reveal: {})
+        )
+        Divider()
+        TransferRow(
+            item: TransferDisplay.item(
+                for: DownloadRecord(name: "Photos.zip", kind: .file, state: .cancelled)
+            ),
+            actions: TransferRowActions(remove: {})
         )
     }
     .padding()

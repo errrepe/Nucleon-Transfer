@@ -1,21 +1,34 @@
 // Nucleon Transfer — browser download orchestration (F7 S2.3; F8.2-R5
-// cancellation).
-// Extracted from the pre-F7 browser view-model, same behavior: the user picks
-// ONE destination folder for the whole batch, then items download
-// SEQUENTIALLY (a file via downloadSingleFile with per-block progress, a
-// folder via downloadTree preserving structure). Each item reports a
-// DownloadRecord to the shared activity store; failures land on the
-// record, never block the remaining items. Downloads do not mutate the
+// cancellation; F8.4-U7b settings).
+// Extracted from the pre-F7 browser view-model: ONE destination folder for
+// the whole batch (the Settings default folder, else the panel), then up
+// to "Simultaneous downloads" items run in parallel (BoundedConcurrency;
+// a file via downloadSingleFile with per-block progress, a folder via
+// downloadTree preserving structure). All items of a batch share ONE
+// DriveDownloadAdapter, so its DownloadPlacement reserves names across
+// items too — "A.txt" and "a.txt" picked together never collide. Each
+// item reports a DownloadRecord to the shared activity store; failures
+// land on the record, never block the remaining items. Downloads do not mutate the
 // remote tree, so the browser is NOT invalidated afterwards.
 // Cancellation (F8.2-R5): each item runs in its own Task keyed by its
 // record ID — `cancel(id)` stops one (the batch moves on), `cancelAll()`
 // stops every item and the rest of every batch (sign-out calls it before
 // the keys are dropped, so no download outlives the session). A cancelled
 // item lands as `.cancelled`, never `.failed`; the adapter removes its
-// temp file.
-// Security scope: the panel URL arrives already started; we still call
-// startAccessing (harmless no-op) and ALWAYS balance it with
-// stopAccessing when the batch ends.
+// temp file. The epoch is re-checked on the MainActor right before an
+// item registers its Task, so nothing starts after `cancelAll` returns.
+// Security scope: the panel URL arrives already started; a default-folder
+// URL comes from a security-scoped bookmark and is started here. Either
+// way startAccessing is called once and ALWAYS balanced with
+// stopAccessing after every item of the batch has finished.
+// F8.4-U6: the transfers popover opens when a batch starts (same as
+// upload intake, and only if Settings › General allows it), and single
+// files report their size so the row can show speed and time left.
+// F8.4 review: `choosingDestination` covers the destination step only, so
+// a download requested while a batch runs starts its own batch (its own
+// adapter, grant and epoch check). Every batch draws from ONE AsyncSlots
+// pool — "Simultaneous downloads" bounds all batches together, served in
+// request order. The same item requested twice still runs once (inFlight).
 import Foundation
 
 @MainActor
@@ -28,8 +41,11 @@ final class DownloadCoordinator {
     /// duplicates a transfer (the legacy `downloading` set did the same).
     private var inFlight: Set<String> = []
     /// Guards against two destination panels stacking when the user
-    /// triggers Download twice in quick succession.
+    /// triggers Download twice in quick succession. Held only while the
+    /// destination resolves — a running batch never blocks a new one.
     private var choosingDestination = false
+    /// "Simultaneous downloads" slots shared by every batch.
+    private let slots = AsyncSlots()
     /// Record ID → the Task downloading that item (F8.2-R5).
     private var tasks: [UUID: Task<Void, Never>] = [:]
     /// Bumped by `cancelAll`: a batch started under an older epoch stops
@@ -43,24 +59,41 @@ final class DownloadCoordinator {
         self.activity = activity
     }
 
-    /// Picks one destination folder, then downloads `items` one by one.
-    /// Cancellation (nil panel result) silently no-ops — the user dismissed.
+    /// Resolves one destination folder (default folder or panel), then
+    /// downloads `items` with at most "Simultaneous downloads" in flight
+    /// across all batches (the width is read once, at batch start).
+    /// Cancellation (nil panel result) silently no-ops — the user
+    /// dismissed. A request arriving while a panel is open is dropped
+    /// (no stacked panels); one arriving while a batch downloads runs.
     func download(_ items: [DriveItem]) async {
         guard !items.isEmpty, !choosingDestination else { return }
         let batchEpoch = epoch
         choosingDestination = true
-        defer { choosingDestination = false }
-        guard let destination = await Panels.chooseDownloadFolder(),
-              batchEpoch == epoch
-        else { return }
+        let chosen = await Panels.downloadDestination(itemCount: items.count)
+        choosingDestination = false
+        guard let destination = chosen, batchEpoch == epoch else { return }
         let scoped = destination.startAccessingSecurityScopedResource()
+        // Runs after the bounded loop below has drained (it awaits every
+        // started item), so no item outlives the grant.
         defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
+        // ONE adapter (and so one DownloadPlacement) for every item of the
+        // batch, parallel ones included.
         let adapter = DriveDownloadAdapter(
             drive: drive, addressKeys: addressKeys, resolver: resolver
         )
-        for item in items {
-            guard batchEpoch == epoch else { return }
-            await download(item, with: adapter, to: destination)
+        // Mirror UploadCoordinator's intake: show the popover so the
+        // user sees the download start (records land as items begin).
+        if AppSettings.opensTransfersOnStart(.standard) {
+            activity.presentTransfers = true
+        }
+        let width = AppSettings.maxConcurrentDownloads(.standard)
+        await BoundedConcurrency.forEach(
+            items, slots: slots, width: width,
+            shouldStart: { batchEpoch == self.epoch }
+        ) { [weak self] item in
+            await self?.download(
+                item, batchEpoch: batchEpoch, with: adapter, to: destination
+            )
         }
     }
 
@@ -81,16 +114,20 @@ final class DownloadCoordinator {
     }
 
     /// One item, errors captured on its record so the batch continues.
+    /// The epoch check, record and Task registration run without a
+    /// suspension in between, so `cancelAll` either sees this item's Task
+    /// or this item never starts.
     private func download(
-        _ item: DriveItem, with adapter: DriveDownloadAdapter, to destination: URL
+        _ item: DriveItem, batchEpoch: Int, with adapter: DriveDownloadAdapter, to destination: URL
     ) async {
-        guard !inFlight.contains(item.id) else { return }
+        guard batchEpoch == epoch, !inFlight.contains(item.id) else { return }
         inFlight.insert(item.id)
         defer { inFlight.remove(item.id) }
         let recordID = activity.downloadStarted(
             name: item.name,
             kind: item.isFolder ? .folder : .file,
-            destination: destination
+            destination: destination,
+            bytesTotal: item.isFolder || item.size <= 0 ? nil : item.size
         )
         let task = Task { [activity] in
             await Self.run(

@@ -12,7 +12,8 @@ enum FolderConflictResolution: Equatable, Sendable {
     /// An existing FOLDER holds the name — merge into it (reuse its LinkID).
     case reuse(linkID: String)
     /// The name is taken by a FILE, or no matching child could be found —
-    /// surface the reason and stop.
+    /// surface the reason and stop. `message` is a name-free queue token
+    /// (UserFacingError.Copy), localized when the failed row is shown.
     case fail(message: String)
 }
 
@@ -42,16 +43,10 @@ enum FolderConflictPolicy {
             if child.isFolder {
                 return .reuse(linkID: child.id)
             }
-            return .fail(
-                message: "A file named “\(name)” already exists here, "
-                    + "so the folder can’t be created."
-            )
+            return .fail(message: UserFacingError.Copy.folderNameTakenByFile.token)
         }
         // The server reported a duplicate but the listing shows no matching
         // name (decrypt failure, or a trashed/draft node holding the hash).
-        return .fail(
-            message: "“\(name)” already exists but the conflicting item "
-                + "couldn’t be identified — reload the folder and retry."
-        )
+        return .fail(message: UserFacingError.Copy.folderConflictUnidentified.token)
     }
 }

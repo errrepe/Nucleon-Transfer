@@ -107,7 +107,7 @@ struct LocalFileAccessTests {
     @Test func nothingResolvesIsPermanentMissing() {
         let fs = FakeFS()
         fs.resolveFails = true
-        #expect(throws: TransferFailure.permanent("local file missing — re-add a.txt")) {
+        #expect(throws: TransferFailure.permanent("local file missing")) {
             _ = try fs.access.open(bookmarkedJob())
         }
         #expect(fs.started.isEmpty)

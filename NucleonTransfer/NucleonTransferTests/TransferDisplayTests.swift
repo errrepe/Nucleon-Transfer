@@ -114,7 +114,8 @@ struct TransferDisplayTests {
         #expect(item.isFailed)
         #expect(!item.isActive)
         // Raw API strings are upgraded to actionable guidance.
-        #expect(item.subtitle.contains("server error"))
+        #expect(item.subtitle.contains("servers are having trouble"))
+        #expect(item.subtitle.hasSuffix("(Error 500)"))
     }
 
     @Test func cancelledUploadReadsCancelledNotRed() {
@@ -216,5 +217,114 @@ struct TransferDisplayTests {
             record(state: .downloading), record(state: .done),
         ]
         #expect(TransferDisplay.activeCount(uploads: uploads, downloads: downloads) == 3)
+    }
+
+    // MARK: - F8.4-U6 progress line, badge, section counts
+
+    @Test func uploadingWithoutRateLeadsWithPercent() {
+        let j = job(state: .uploading, bytesDone: 33_600_000) // 42%
+        let item = TransferDisplay.item(for: j, destinationName: nil)
+        #expect(item.subtitle.hasPrefix("42% · "))
+        #expect(!item.subtitle.contains("/s"))
+    }
+
+    @Test func uploadingWithRateShowsSpeedAndETA() {
+        let j = job(state: .uploading, bytesDone: 40_000_000) // 50% of 80 MB
+        let item = TransferDisplay.item(
+            for: j, destinationName: "My Files", bytesPerSecond: 2_000_000
+        )
+        // 40 MB left at 2 MB/s = 20 s.
+        #expect(item.subtitle.hasPrefix("50% · "))
+        #expect(item.subtitle.contains("/s · "))
+        #expect(item.subtitle.hasSuffix(" left"))
+    }
+
+    @Test func downloadWithRateAndSizeShowsETA() {
+        var r = record(state: .downloading, progress: 0.5)
+        r.bytesTotal = 10_000_000
+        #expect(r.bytesDone == 5_000_000)
+        let item = TransferDisplay.item(for: r, bytesPerSecond: 1_000_000)
+        #expect(item.subtitle.hasPrefix("50% · "))
+        #expect(item.subtitle.hasSuffix(" left"))
+    }
+
+    @Test func downloadWithRateButNoSizeOmitsETA() {
+        let r = record(state: .downloading, progress: 0.5)
+        #expect(r.bytesDone == nil)
+        let item = TransferDisplay.item(for: r, bytesPerSecond: 1_000_000)
+        #expect(item.subtitle.hasPrefix("50% · "))
+        #expect(!item.subtitle.contains("left"))
+    }
+
+    @Test func sectionsPassRatesOnlyToInFlightRows() {
+        let up = job(state: .uploading, bytesDone: 40_000_000)
+        let done = job(state: .done, bytesDone: 80_000_000)
+        let sections = TransferDisplay.sections(
+            uploads: [up, done], downloads: [],
+            bytesPerSecond: { _ in 1_000_000 }
+        )
+        #expect(sections[0].items[0].subtitle.contains("/s"))
+        #expect(sections[1].items[0].subtitle == "Uploaded")
+    }
+
+    @Test func sectionTitlesCarryCounts() {
+        let sections = TransferDisplay.sections(
+            uploads: [job(state: .failed), job(state: .cancelled), job(state: .done)],
+            downloads: [record(state: .failed, errorMessage: "x")]
+        )
+        #expect(sections.map(\.title) == ["Failed (3)", "Completed (1)"])
+        #expect(sections.map(\.id) == ["Failed", "Completed"])
+    }
+
+    @Test func badgeIsRedOnlyWhenSomethingFailed() {
+        #expect(TransferDisplay.badge(uploads: [], downloads: []) == .none)
+        #expect(
+            TransferDisplay.badge(
+                uploads: [job(state: .uploading), job(state: .cancelled)],
+                downloads: [record(state: .downloading), record(state: .cancelled)]
+            ) == .active(2, failed: 0)
+        )
+        #expect(
+            TransferDisplay.badge(
+                uploads: [job(state: .failed)],
+                downloads: [record(state: .failed, errorMessage: "x"), record(state: .done)]
+            ) == .failed(2)
+        )
+        #expect(TransferBadge.active(2, failed: 0).summary == "2 active")
+        #expect(TransferBadge.failed(1).summary == "1 failed")
+        #expect(TransferBadge.none.summary == nil)
+    }
+
+    /// Review fix (F8.4): a failure no longer hides what is still running.
+    @Test func badgeKeepsTheActiveCountWhenSomethingFailed() {
+        let badge = TransferDisplay.badge(
+            uploads: [job(state: .uploading), job(state: .queued), job(state: .failed)],
+            downloads: [record(state: .downloading), record(state: .failed, errorMessage: "x")]
+        )
+        #expect(badge == .active(3, failed: 2))
+        #expect(TransferBadge.active(3, failed: 1).summary == "3 active, 1 failed")
+    }
+
+    // MARK: - F8.4-U8 status glyphs + VoiceOver value
+
+    @Test func statusGlyphsDoNotRelyOnColor() {
+        let failed = TransferDisplay.item(for: job(state: .failed), destinationName: nil)
+        let cancelled = TransferDisplay.item(for: record(state: .cancelled))
+        let done = TransferDisplay.item(for: record(state: .done))
+        #expect(failed.statusSymbol == "exclamationmark.triangle.fill")
+        #expect(cancelled.statusSymbol == "xmark.circle")
+        #expect(cancelled.isCancelled && !cancelled.isFailed)
+        #expect(done.statusSymbol == nil)
+    }
+
+    @Test func accessibilityValuePrefixesFailures() {
+        let failed = TransferDisplay.item(
+            for: record(state: .failed, errorMessage: "Network connection lost.")
+        )
+        #expect(failed.accessibilityValue == "Failed, Network connection lost.")
+        let active = TransferDisplay.item(for: record(state: .downloading, progress: 0.45))
+        #expect(active.accessibilityValue == active.subtitle)
+        #expect(active.progressText == "45%")
+        #expect(TransferDisplay.item(for: record(state: .done)).progressText == nil)
     }
 }

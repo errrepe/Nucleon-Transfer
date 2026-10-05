@@ -115,8 +115,8 @@ struct TransferQueueTests {
         #expect(TransferErrorClassify.classify(ProtonAPIError.api(code: 400, message: "bad")) == .permanent("api 400: bad"))
         #expect(TransferErrorClassify.classify(ProtonAPIError.api(code: 404, message: "no")) == .permanent("api 404: no"))
         #expect(TransferErrorClassify.classify(ProtonAPIError.humanVerificationRequired) == .needsHumanVerification)
-        #expect(TransferErrorClassify.classify(ProtonAPIError.transport(URLError(.timedOut))) == .transient(URLError(.timedOut).localizedDescription))
-        #expect(TransferErrorClassify.classify(URLError(.networkConnectionLost)) == .transient(URLError(.networkConnectionLost).localizedDescription))
+        #expect(TransferErrorClassify.classify(ProtonAPIError.transport(URLError(.timedOut))) == .transient("copy network-unreachable"))
+        #expect(TransferErrorClassify.classify(URLError(.networkConnectionLost)) == .transient("copy network-unreachable"))
     }
 
     // MARK: happy path + retry

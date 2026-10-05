@@ -8,6 +8,14 @@
 // linkIDs via TransferActivityStore.remoteChanged so the browser marks
 // just those folders stale. `presentTransfers` flips on intake so the
 // S3.2 popover can open on the first upload.
+// F8.4-U1: the first job failing with Proton code 2000 (app not
+// allowlisted for block upload) sets `uploadsBlocked` — the browser then
+// disables every upload entry point and shows one banner. In memory only:
+// AppSession builds a fresh coordinator per sign-in, and a relaunch
+// starts unblocked, so a server-side allowlist change is picked up.
+// F8.4-U7b: the snapshot listener is the single feed of upload speed
+// samples (TransferActivityStore.recordUploadProgress), and intake opens
+// the Transfers popover only when Settings › General allows it.
 import Foundation
 import UniformTypeIdentifiers
 
@@ -26,6 +34,12 @@ final class UploadCoordinator {
     /// Last intake failure, already mapped through UserFacingError
     /// (S3.2's panel surfaces it; nil = none).
     private(set) var lastError: String?
+    /// Proton refused an upload from this app with code 2000 during this
+    /// run (F8.4-U1). Queued jobs are left as they are — no auto-cancel.
+    private(set) var uploadsBlocked = false
+    /// The user closed the uploads-blocked banner (the entry points stay
+    /// disabled; only the banner goes away).
+    var uploadsBlockedBannerDismissed = false
 
     private let queue: TransferQueue
     private let drive: DriveClient
@@ -34,6 +48,9 @@ final class UploadCoordinator {
     private let activity: TransferActivityStore
     private var started = false
     private var knownDone: Set<UUID> = []
+    /// Failed job IDs of the last snapshot — failures restored from disk
+    /// are seeded here so they never flip `uploadsBlocked` (F8.4-U1).
+    private var knownFailed: Set<UUID> = []
     /// Drop-level security grants still needed by unfinished jobs
     /// (F8.2-R4). Released as soon as all of a drop's jobs finish — jobs
     /// read through their own bookmarks (LocalFileAccess), so nothing has
@@ -69,6 +86,11 @@ final class UploadCoordinator {
     func start() async {
         if !started {
             started = true
+            // Seed before the uploader and the listener exist: failures
+            // restored from disk are old news and must not block uploads
+            // (F8.4-U1) — and a job failing right after the uploader starts
+            // must not be mistaken for a restored one.
+            knownFailed = Set(await queue.snapshot().filter { $0.state == .failed }.map(\.id))
             await queue.setUploader(
                 DriveUploadAdapter(drive: drive, addressKeys: addressKeys, resolver: resolver)
             )
@@ -76,6 +98,9 @@ final class UploadCoordinator {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.jobs = snap
+                    // Speed/ETA samples (F8.4-U6): every snapshot the
+                    // queue publishes, whether or not a view is on screen.
+                    self.activity.recordUploadProgress(snap)
                     let doneNow = Set(snap.filter { $0.state == .done }.map(\.id))
                     let newDone = doneNow.subtracting(self.knownDone)
                     if !newDone.isEmpty {
@@ -84,6 +109,7 @@ final class UploadCoordinator {
                         self.activity.remoteChanged(parentLinkIDs: parents)
                     }
                     self.knownDone = doneNow
+                    self.noteFailures(in: snap)
                     self.releaseFinishedGrants(in: snap)
                 }
             }
@@ -91,6 +117,14 @@ final class UploadCoordinator {
         }
         jobs = await queue.snapshot()
         knownDone = Set(jobs.filter { $0.state == .done }.map(\.id))
+    }
+
+    /// F8.4-U1: flips `uploadsBlocked` on the first NEW failure carrying
+    /// Proton code 2000 (typed `TransferJob.errorCode`, never message text).
+    private func noteFailures(in snapshot: [TransferJob]) {
+        let scan = UploadBlockDetection.scan(snapshot, knownFailed: knownFailed)
+        knownFailed = scan.failed
+        if scan.blocked, !uploadsBlocked { uploadsBlocked = true }
     }
 
     /// Detaches the snapshot listener (sign-out). AppSession pauses the
@@ -181,7 +215,9 @@ final class UploadCoordinator {
                 // Folder creation happened inside enqueueTree (parent→child):
                 // the remote tree changed under the destination.
                 activity.remoteChanged(parentLinkIDs: [destination.linkID])
-                activity.presentTransfers = true
+                if AppSettings.opensTransfersOnStart(.standard) {
+                    activity.presentTransfers = true
+                }
             } catch {
                 if granted { url.stopAccessingSecurityScopedResource() }
                 lastError = "\(url.lastPathComponent): \(UserFacingError.message(for: error))"

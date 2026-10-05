@@ -34,6 +34,10 @@ struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     /// per-block progress yet (folders report file counts instead). The
     /// store clears it on finish/fail so done rows never render stale bars.
     var progress: Double?
+    /// Plaintext size of a single-file download (DriveItem.size), for the
+    /// speed/ETA line (F8.4-U6). nil for folders and unknown sizes — the
+    /// row then shows the percentage only.
+    var bytesTotal: Int64?
     var errorMessage: String?
     var startedAt: Date
     var updatedAt: Date
@@ -46,6 +50,7 @@ struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
         fileCount: Int = 0,
         destinationName: String? = nil,
         progress: Double? = nil,
+        bytesTotal: Int64? = nil,
         errorMessage: String? = nil,
         startedAt: Date = Date(),
         updatedAt: Date = Date()
@@ -57,17 +62,26 @@ struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
         self.fileCount = fileCount
         self.destinationName = destinationName
         self.progress = progress
+        self.bytesTotal = bytesTotal
         self.errorMessage = errorMessage
         self.startedAt = startedAt
         self.updatedAt = updatedAt
     }
 
+    /// Bytes written so far, derived from the block fraction × size
+    /// (block-granular — the rate estimator smooths the steps). nil
+    /// without a size or before the first progress hop.
+    var bytesDone: Int64? {
+        guard let progress, let bytesTotal, bytesTotal > 0 else { return nil }
+        return Int64((progress * Double(bytesTotal)).rounded())
+    }
+
     var stateLabel: String {
         switch state {
-        case .downloading: return "Downloading"
-        case .done: return "Done"
-        case .failed: return "Failed"
-        case .cancelled: return "Cancelled"
+        case .downloading: return String(localized: "Downloading")
+        case .done: return String(localized: "Done")
+        case .failed: return String(localized: "Failed")
+        case .cancelled: return String(localized: "Cancelled")
         }
     }
 
@@ -75,16 +89,17 @@ struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     var summary: String {
         switch state {
         case .downloading:
-            return kind == .folder ? "Downloading folder…" : "Downloading…"
+            return kind == .folder
+                ? String(localized: "Downloading folder…") : String(localized: "Downloading…")
         case .done:
-            if kind == .folder {
-                return "Downloaded \(fileCount) file(s)" + (destinationName.map { " → \($0)" } ?? "")
-            }
-            return "Downloaded" + (destinationName.map { " → \($0)" } ?? "")
+            let done = kind == .folder
+                ? String(AttributedString(localized: "Downloaded ^[\(fileCount) file](inflect: true)").characters)
+                : String(localized: "Downloaded")
+            return done + (destinationName.map { " → \($0)" } ?? "")
         case .failed:
-            return errorMessage ?? "Download failed"
+            return errorMessage ?? String(localized: "Download failed")
         case .cancelled:
-            return "Download cancelled"
+            return String(localized: "Download cancelled")
         }
     }
 

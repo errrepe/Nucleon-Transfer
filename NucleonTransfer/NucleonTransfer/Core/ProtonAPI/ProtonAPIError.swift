@@ -74,27 +74,10 @@ struct ProtonEnvelope: Decodable, Sendable {
 }
 
 extension ProtonAPIError: LocalizedError {
+    /// Same plain-language copy as the UI (F8.4-U2): anything that reaches
+    /// `localizedDescription` (queue messages, logs of the error type) reads
+    /// as "what happened + what to do", never as protocol jargon.
     var errorDescription: String? {
-        switch self {
-        case .unauthorized: return "Not signed in (or session expired)."
-        case .needs2FA: return "Two-factor code required."
-        case .humanVerificationRequired: return "Proton requires human verification. Try again later."
-        case .rateLimited: return "Too many recent logins (Proton 2028 rate-limit). Wait ~10 minutes before retrying — do not log in repeatedly. If you are signed in, keep using this session."
-        case .invalidServerProof: return "Server proof mismatch — possible downgrade attack. Aborted."
-        case .invalidModulusSignature: return "SRP modulus signature missing or invalid."
-        case let .unsupportedAuthVersion(v): return "Unsupported legacy auth version \(v)."
-        case .secureRandomFailed: return "System random number generator failed."
-        case .bcryptNotAvailable: return "Crypto backend missing (bcrypt)."
-        case .invalidBcryptSalt: return "Malformed bcrypt salt."
-        case .keyVerificationFailed: return "Unlocked key does not match its public key."
-        case let .srpParamsOutOfBounds(msg): return "SRP parameter error: \(msg)."
-        case let .api(code, message): return "Proton API \(code): \(message)."
-        case let .http(status, code, message, _):
-            if let code { return "HTTP \(status) (Proton \(code)): \(message)." }
-            return "HTTP \(status): \(message)."
-        case let .untrustedStorageHost(host):
-            return "Refused storage URL on untrusted host \(host)."
-        case let .transport(e): return e.localizedDescription
-        }
+        UserFacingError.message(for: self)
     }
 }

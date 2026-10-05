@@ -15,6 +15,11 @@
 // F8.3-P3: the row under the pointer lives in a tiny @Observable
 // (`RowHoverState`) instead of FolderView @State — pointer moves no longer
 // re-evaluate FolderView/FolderTable, only the drop overlay that reads it.
+// F8.4-U3: a Kind column (UTType description, "Folder" for folders) and
+// Finder-style Modified dates ("Today at 14:32", "Yesterday at …").
+// F8.4-U4: every column carries a customizationID, so widths, visibility
+// (header right-click) and order persist via the container's
+// @SceneStorage TableColumnCustomization. Name can't be hidden.
 import SwiftUI
 
 /// The row under the pointer, written by FolderTable's row hover handlers
@@ -52,8 +57,16 @@ struct FolderTable: View {
     /// from hover callbacks only, never read in `body`.
     let hover: RowHoverState
 
+    /// Persisted column layout (F8.4-U4).
+    @Binding var columnCustomization: TableColumnCustomization<DriveItem>
+
     var body: some View {
-        Table(of: DriveItem.self, selection: $model.selection, sortOrder: $model.sortOrder) {
+        Table(
+            of: DriveItem.self,
+            selection: $model.selection,
+            sortOrder: $model.sortOrder,
+            columnCustomization: $columnCustomization
+        ) {
             TableColumn("Name", value: \.name, comparator: .localizedStandard) { item in
                 HStack(spacing: 6) {
                     FileIcon(item: item)
@@ -82,21 +95,34 @@ struct FolderTable: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(Self.nameAccessibilityLabel(for: item))
             }
-            .width(min: 160, ideal: 280)
+            .width(min: 160, ideal: 220)
+            .customizationID("name")
+            .disabledCustomizationBehavior(.visibility)
+            TableColumn("Kind", value: \.kindDescription, comparator: .localizedStandard) { item in
+                Text(item.kindDescription)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .width(min: 80, ideal: 120)
+            .customizationID("kind")
             TableColumn("Modified", value: \.modified) { item in
-                Text(item.modified, format: .dateTime.day().month(.abbreviated).year().hour().minute())
+                Text(ModifiedDateFormatting.string(for: item.modified))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+                    .lineLimit(1)
             }
+            .width(min: 120, ideal: 175)
+            .customizationID("modified")
             TableColumn("Size", value: \.size) { item in
                 Text(DriveFormatting.size(item))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
             .alignment(.trailing)
+            .customizationID("size")
         } rows: {
             ForEach(items) { item in
-                if item.isFolder && model.root.allowsWrites {
+                if item.isFolder && model.canUpload {
                     TableRow(item)
                         .onHover { hover.track(item, hovering: $0) }
                         // B10: a drop on this row uploads into THAT
@@ -124,10 +150,11 @@ struct FolderTable: View {
             if ids.isEmpty {
                 Button("New Folder") { model.showingNewFolder = true }
                     .disabled(!model.root.allowsWrites)
+                // F8.4-U1: also off while Proton blocks uploads (2000).
                 Button("Upload Files…") { Task { await model.uploadPanel(folders: false) } }
-                    .disabled(!model.root.allowsWrites)
+                    .disabled(!model.canUpload)
                 Button("Upload Folder…") { Task { await model.uploadPanel(folders: true) } }
-                    .disabled(!model.root.allowsWrites)
+                    .disabled(!model.canUpload)
                 Divider()
                 Button("Reload") { Task { await model.reloadCurrent() } }
             } else {
@@ -151,9 +178,18 @@ struct FolderTable: View {
     /// "report.pdf, file" — plus the decryption caveat when the lock
     /// badge shows (the visible name is the "Encrypted Item" placeholder).
     private static func nameAccessibilityLabel(for item: DriveItem) -> String {
-        var label = "\(item.name), \(item.isFolder ? "folder" : "file")"
-        if !item.isNameDecrypted { label += ", name couldn't be decrypted" }
-        if item.signatureIssue { label += ", signature could not be verified" }
-        return label
+        var parts = [
+            item.name,
+            item.isFolder
+                ? String(localized: "folder", comment: "VoiceOver: row kind, after the name")
+                : String(localized: "file", comment: "VoiceOver: row kind, after the name"),
+        ]
+        if !item.isNameDecrypted {
+            parts.append(String(localized: "name couldn't be decrypted", comment: "VoiceOver: row status"))
+        }
+        if item.signatureIssue {
+            parts.append(String(localized: "signature could not be verified", comment: "VoiceOver: row status"))
+        }
+        return parts.joined(separator: ", ")
     }
 }

@@ -58,17 +58,17 @@ enum ShareCatalog {
         let mains = eligible.filter { ShareKind(rawType: $0.type) == .main }
         let myFilesMeta = mains.filter { mainShareIDs.contains($0.shareID) }.min(by: byAge)
             ?? mains.min(by: byAge)
-        let myFiles = myFilesMeta.map { root(from: $0, kind: .main, name: "My Files") }
+        let myFiles = myFilesMeta.map { root(from: $0, kind: .main, name: String(localized: "My Files", comment: "Sidebar: the user’s main Proton Drive volume")) }
 
         let photos = eligible
             .first { ShareKind(rawType: $0.type) == .photos }
-            .map { root(from: $0, kind: .photos, name: "Photos") }
+            .map { root(from: $0, kind: .photos, name: String(localized: "Photos", comment: "Sidebar: the Proton Drive Photos volume")) }
 
         let computers = eligible
             .filter { ShareKind(rawType: $0.type) == .device }
             .sorted(by: byAge)
             .enumerated()
-            .map { index, meta in root(from: meta, kind: .device, name: "Computer \(index + 1)") }
+            .map { index, meta in root(from: meta, kind: .device, name: String(localized: "Computer \(index + 1)", comment: "Sidebar: a computer backup share, numbered")) }
 
         return DriveRoots(myFiles: myFiles, photos: photos, computers: computers)
     }

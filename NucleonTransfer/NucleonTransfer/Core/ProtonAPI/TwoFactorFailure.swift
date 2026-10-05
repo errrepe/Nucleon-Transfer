@@ -30,14 +30,27 @@ enum TwoFactorFailure: Sendable {
     }
 
     /// Inline message for the code prompt. A Proton API rejection reads as
-    /// a wrong code; everything else goes through UserFacingError.
-    static func message(for error: Error) -> String {
-        if case .api? = error as? ProtonAPIError {
-            return "That code didn’t work. Check your authenticator app and try again."
-        }
-        if case let .http(status, _, _, _)? = error as? ProtonAPIError, (400..<500).contains(status), status != 408 {
-            return "That code didn’t work. Check your authenticator app and try again."
+    /// a wrong code (worded for the mode in use); everything else goes
+    /// through UserFacingError.
+    static func message(for error: Error, mode: TwoFactorCodeInput.Mode = .authenticator) -> String {
+        if isRejectedCode(error) {
+            switch mode {
+            case .authenticator:
+                return String(localized: "That code didn’t work. Check your authenticator app and try again.")
+            case .recoveryCode:
+                return String(localized: "That recovery code didn’t work. Check it and try again — each code works only once.")
+            }
         }
         return UserFacingError.message(for: error)
+    }
+
+    private static func isRejectedCode(_ error: Error) -> Bool {
+        if case .api? = error as? ProtonAPIError { return true }
+        if case let .http(status, _, _, _)? = error as? ProtonAPIError,
+           (400..<500).contains(status), status != 408
+        {
+            return true
+        }
+        return false
     }
 }

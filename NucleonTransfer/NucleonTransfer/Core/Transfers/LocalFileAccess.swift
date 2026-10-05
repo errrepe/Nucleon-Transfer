@@ -66,7 +66,7 @@ struct LocalFileAccess: Sendable {
         if fileExists(job.localPath) {
             return Opened(url: URL(fileURLWithPath: job.localPath), scoped: false, refreshedBookmark: nil)
         }
-        throw TransferFailure.permanent("local file missing — re-add \(job.fileName)")
+        throw TransferFailure.permanent(UserFacingError.Copy.fileMissing.token)
     }
 
     func close(_ opened: Opened) {

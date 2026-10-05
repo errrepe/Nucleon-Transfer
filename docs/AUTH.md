@@ -98,6 +98,7 @@
 ## 3. 2FA
 
 - `POST /auth/v4/2fa` com `{ TwoFactorCode: "123456" }`.
+- Códigos de recuperação (F8.4-U5) usam o MESMO campo `TwoFactorCode` da mesma chamada — sem endpoint separado. Fonte: WebClients `packages/components/containers/login/MinimalLoginContainer.tsx` (TOTPForm `type: 'totp' | 'recovery-code'`, espaços removidos, auto-envio só para o código de 6 dígitos) → `loginActions.ts` `handleTotp` → `auth2FA({ TwoFactorCode })` (`shared/lib/api/auth.ts`). Regras do campo em `Core/ProtonAPI/TwoFactorCodeInput.swift`.
 - TOTP de 30s — validar skew de relógio via NTP antes de acusar código inválido.
 - Erros comuns: `8002` (código inválido/expirado), `8101` (muitas tentativas → backoff).
 - Fora de escopo MVP: FIDO2 / hardware key enrollment. Mensagem clara se conta exigir.

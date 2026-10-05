@@ -17,6 +17,12 @@ struct StorageFooterView: View {
         return (account.usedBytes, max)
     }
 
+    /// "1.2 GB of 5 GB used"-style text shared by the caption and the
+    /// gauge's accessibility value.
+    private var storageText: String? {
+        session.account.map { DriveFormatting.storage(used: $0.usedBytes, max: $0.maxBytes) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             #if DEBUG
@@ -39,9 +45,13 @@ struct StorageFooterView: View {
                 }
                 .gaugeStyle(.linearCapacity)
                 .tint(quotaTint(for: Double(quota.used) / Double(quota.max)))
+                // F8.4-U8: the label is visually empty — name it for
+                // VoiceOver and read the same "used of total" text.
+                .accessibilityLabel("Storage")
+                .accessibilityValue(storageText ?? "")
             }
-            if let account = session.account {
-                Text(DriveFormatting.storage(used: account.usedBytes, max: account.maxBytes))
+            if let storageText {
+                Text(storageText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -52,7 +62,7 @@ struct StorageFooterView: View {
         .confirmationDialog(
             hasActiveTransfers
                 ? "Sign out? Active transfers will be paused."
-                : "Sign out of \(session.account?.email ?? "this account")?",
+                : "Sign out of \(session.account?.email ?? String(localized: "this account"))?",
             isPresented: $showSignOutConfirm,
             titleVisibility: .visible
         ) {
@@ -72,7 +82,7 @@ struct StorageFooterView: View {
             Image(systemName: "person.crop.circle")
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
-                Text(session.account?.displayName ?? "Account")
+                Text(session.account?.displayName ?? String(localized: "Account"))
                     .font(.callout)
                     .lineLimit(1)
                 if let email = session.account?.email, !email.isEmpty {

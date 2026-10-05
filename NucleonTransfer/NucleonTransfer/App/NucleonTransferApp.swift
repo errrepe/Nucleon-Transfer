@@ -25,11 +25,8 @@ struct NucleonTransferApp: App {
                 .environment(session)
                 .task {
                     quitFlush.flush = { [queue = session.queue] in await queue.flush() }
-                    let stored = UserDefaults.standard.integer(
-                        forKey: AppSettings.maxConcurrentUploadsKey
-                    )
                     await session.queue.setMaxConcurrent(
-                        stored > 0 ? stored : AppSettings.defaultMaxConcurrentUploads
+                        AppSettings.maxConcurrentUploads(.standard)
                     )
                 }
         }

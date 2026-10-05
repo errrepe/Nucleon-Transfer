@@ -94,13 +94,13 @@ struct FolderConflictPolicyTests {
 
     @Test func resolveFailsWhenNameIsTakenByFile() {
         let children = [child("L-file", name: "Docs", folder: false)]
-        #expect(
-            FolderConflictPolicy.resolve(name: "Docs", children: children)
-                == .fail(
-                    message: "A file named “Docs” already exists here, "
-                        + "so the folder can’t be created."
-                )
-        )
+        let result = FolderConflictPolicy.resolve(name: "Docs", children: children)
+        #expect(result == .fail(message: "copy folder-name-taken-by-file"))
+        // Name-free token; the localized copy appears only on display.
+        guard case let .fail(message) = result else { return }
+        #expect(!message.contains("Docs"))
+        #expect(UserFacingError.message(for: TransferFailure.permanent(message))
+            == UserFacingError.Copy.folderNameTakenByFile.text)
     }
 
     @Test func resolveFailsWithNoMatch() {
@@ -109,6 +109,7 @@ struct FolderConflictPolicyTests {
             child("L-b", name: "Beta", folder: false),
         ]
         let result = FolderConflictPolicy.resolve(name: "Gamma", children: children)
+        #expect(result == .fail(message: "copy folder-conflict-unidentified"))
         guard case .fail = result else {
             Issue.record("expected .fail when no child matches, got \(result)")
             return

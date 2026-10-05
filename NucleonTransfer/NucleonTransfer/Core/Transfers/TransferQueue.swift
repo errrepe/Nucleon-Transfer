@@ -45,6 +45,10 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
     var attempt: Int
     var maxAttempts: Int
     var errorMessage: String?
+    /// Proton API code of the failure behind `errorMessage`, when the
+    /// error carried one (F8.4-U1: 2000 = app not allowlisted for block
+    /// upload). Kept typed so the UI never parses the message text.
+    var errorCode: Int?
     var createdAt: Date
     var updatedAt: Date
     /// Remote LinkID after a successful upload.
@@ -70,7 +74,7 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey {
         case id, fileName, relativePath, localPath, localBookmark, shareID,
              parentLinkID, state, bytesTotal, bytesDone, attempt, maxAttempts,
-             errorMessage, createdAt, updatedAt, remoteLinkID,
+             errorMessage, errorCode, createdAt, updatedAt, remoteLinkID,
              clientUID, draftLinkID, draftRevisionID, draftCommitSent, accountID
     }
 
@@ -94,6 +98,7 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
         attempt = try c.decodeIfPresent(Int.self, forKey: .attempt) ?? 0
         maxAttempts = try c.decodeIfPresent(Int.self, forKey: .maxAttempts) ?? 5
         errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        errorCode = try? c.decodeIfPresent(Int.self, forKey: .errorCode)
         createdAt = (try? c.decodeIfPresent(Date.self, forKey: .createdAt)) ?? Date()
         updatedAt = (try? c.decodeIfPresent(Date.self, forKey: .updatedAt)) ?? Date()
         remoteLinkID = try c.decodeIfPresent(String.self, forKey: .remoteLinkID)
@@ -208,7 +213,9 @@ enum TransferErrorClassify {
                 // Login-rate-limit shape reused defensively: surface, don't spin.
                 return .permanent("rate limited")
             default:
-                return .permanent(api.localizedDescription)
+                // Persist a language-neutral, name-free token; the copy is
+                // localized at display time (UserFacingError.message(forJob:)).
+                return .permanent(UserFacingError.token(for: api))
             }
         }
         let ns = error as NSError
@@ -219,12 +226,28 @@ enum TransferErrorClassify {
                  NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed,
                  NSURLErrorResourceUnavailable, NSURLErrorInternationalRoamingOff,
                  NSURLErrorCallIsActive, NSURLErrorDataNotAllowed:
-                return .transient(ns.localizedDescription)
+                return .transient(UserFacingError.token(for: error))
             default:
-                return .permanent(ns.localizedDescription)
+                return .permanent(UserFacingError.token(for: error))
             }
         }
-        return .permanent(error.localizedDescription)
+        // F8.4-U2: never persist a raw localizedDescription — Cocoa file
+        // errors quote file names, which the string mapper must not see.
+        // F8.4 review: nor localized copy — a token, localized on display.
+        return .permanent(UserFacingError.token(for: error))
+    }
+
+    /// The Proton envelope code carried by `error` (`.api` or an `.http`
+    /// answer whose body had one), looking through `.transport` wrapping.
+    /// nil for transport/local errors (F8.4-U1).
+    static func protonCode(_ error: Error) -> Int? {
+        guard let api = error as? ProtonAPIError else { return nil }
+        switch api {
+        case let .api(code, _): return code
+        case let .http(_, code, _, _): return code
+        case let .transport(underlying): return protonCode(underlying)
+        default: return nil
+        }
     }
 
     /// Server-requested wait (`Retry-After`, seconds) carried by `error`,
@@ -828,6 +851,7 @@ actor TransferQueue {
         guard isVisible(id), var j = jobs[id], j.state == .paused else { return }
         j.state = .queued
         j.errorMessage = nil
+        j.errorCode = nil
         j.updatedAt = Date()
         jobs[id] = j
         fifo.append(id)
@@ -892,6 +916,7 @@ actor TransferQueue {
         j.attempt = 0
         j.bytesDone = 0
         j.errorMessage = nil
+        j.errorCode = nil
         j.remoteLinkID = nil
         j.updatedAt = Date()
     }
@@ -1037,6 +1062,7 @@ actor TransferQueue {
                 done.draftRevisionID = nil
                 done.draftCommitSent = false
                 done.errorMessage = nil
+                done.errorCode = nil
                 done.updatedAt = Date()
                 jobs[id] = done
                 return
@@ -1061,6 +1087,7 @@ actor TransferQueue {
                     failed.attempt += 1
                     failed.state = .failed
                     failed.errorMessage = message
+                    failed.errorCode = TransferErrorClassify.protonCode(error)
                     failed.updatedAt = Date()
                     jobs[id] = failed
                     return
@@ -1068,6 +1095,7 @@ actor TransferQueue {
                     guard var retrying = jobs[id] else { return }
                     retrying.attempt += 1
                     retrying.errorMessage = message
+                    retrying.errorCode = TransferErrorClassify.protonCode(error)
                     retrying.updatedAt = Date()
                     jobs[id] = retrying
                     job = retrying // carries the persisted draft IDs into the retry
