@@ -22,6 +22,7 @@
 // `SessionManager.tokenChanges`, consumed in order by one Task; the last
 // username is persisted only with "Keep me signed in".
 import Foundation
+import os
 
 @MainActor
 @Observable
@@ -292,6 +293,7 @@ final class AppSession {
             return
         case let .failed(failure):
             guard phase == .restoring else { return }
+            DiagnosticsLog.session.error("restore: vault unlock failed (\(String(describing: failure), privacy: .public))")
             let decision = RestoreFailure.decision(for: failure)
             canRetryTouchID = RestoreFailure.keepsRememberedSession(decision)
             loginError = RestoreFailure.message(for: decision)
@@ -306,15 +308,19 @@ final class AppSession {
         // The restore's own refresh rotates the refresh token — it must
         // land in the Keychain, or the next launch would replay a spent one.
         remembersSession = true
+        var step = "token refresh"
         do {
             try await sessions.restore(uid: remembered.uid, refreshToken: remembered.refreshToken)
             guard phase == .restoring else { return }
+            step = "key unlock"
             try await finishUnlock(saltedPass: remembered.saltedKeyPass)
         } catch {
+            DiagnosticsLog.session.error("restore: \(step, privacy: .public) failed: \(DiagnosticsLog.safeSummary(error), privacy: .public)")
             guard phase == .restoring else { return }
             await failRestore(error)
             return
         }
+        DiagnosticsLog.session.info("restore: succeeded")
         guard phase == .restoring else { return }
         await refreshAccount()
         phase = .signedIn
@@ -389,6 +395,7 @@ final class AppSession {
               !sealed || BiometryAvailability.isAvailable(),
               let tokens = await sessions.currentTokens()
         else {
+            DiagnosticsLog.session.info("save: skipped (keepSignedIn: \(AppSettings.keepsSignedIn(self.defaults), privacy: .public), sealed: \(sealed, privacy: .public))")
             remembersSession = false
             await vault.delete()
             return
@@ -407,7 +414,9 @@ final class AppSession {
             if let latest = await sessions.currentTokens(), latest != tokens {
                 try await vault.updateTokens(uid: latest.uid, refreshToken: latest.refreshToken)
             }
+            DiagnosticsLog.session.info("save: remembered session stored (sealed: \(sealed, privacy: .public))")
         } catch {
+            DiagnosticsLog.session.error("save: failed: \(DiagnosticsLog.safeSummary(error), privacy: .public)")
             remembersSession = false
             await vault.delete()
         }
@@ -426,7 +435,12 @@ final class AppSession {
     private func tokensChanged(_ tokens: SessionTokens?) async {
         guard tokens != nil, remembersSession else { return }
         guard let latest = await sessions.currentTokens(), remembersSession else { return }
-        _ = try? await vault.updateTokens(uid: latest.uid, refreshToken: latest.refreshToken)
+        do {
+            try await vault.updateTokens(uid: latest.uid, refreshToken: latest.refreshToken)
+            DiagnosticsLog.session.info("rotation: stored refreshed tokens")
+        } catch {
+            DiagnosticsLog.session.error("rotation: store failed: \(DiagnosticsLog.safeSummary(error), privacy: .public)")
+        }
     }
 
     /// Full `signOut` cleanup for a sign-in that got past SRP and then

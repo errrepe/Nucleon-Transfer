@@ -217,7 +217,7 @@ final class BrowserModel {
             return
         }
         do {
-            let items = try await listing.children(of: loc)
+            let items = try await Self.fetchChildren(of: loc, with: listing)
             // Sign-out mid-flight replaced/nilled the listing: drop the
             // result instead of showing another session's data.
             guard session.listing === listing,
@@ -237,6 +237,19 @@ final class BrowserModel {
             else { return }
             store.phase = .failed(UserFacingError.message(for: error))
         }
+    }
+
+    /// One listing request that outlives its caller's task. Loads start
+    /// from view `.task`s, which SwiftUI cancels whenever it rebuilds the
+    /// view (launch, session restore). The folder store is shared: a
+    /// cancelled fetch would fail it with "Cancelled." while the rebuilt
+    /// view's load sees `.loading` and skips as a duplicate — leaving the
+    /// error on screen. Results are still dropped by `loadGate` and the
+    /// listing-identity checks when nobody wants them.
+    private static func fetchChildren(
+        of location: DriveLocation, with listing: any DriveListingProviding
+    ) async throws -> [DriveItem] {
+        try await Task { try await listing.children(of: location) }.value
     }
 
     /// F8.4-U4: reopens the folder chain saved for this root (link IDs
@@ -271,7 +284,7 @@ final class BrowserModel {
         guard session.listing === listing else { return nil }
         let token: UInt64? = store.phase == .loading
             ? nil : loadGate.begin(folder: location.linkID)
-        guard let items = try? await listing.children(of: location) else { return nil }
+        guard let items = try? await Self.fetchChildren(of: location, with: listing) else { return nil }
         guard let token, session.listing === listing,
               let visible = loadGate.apply(items, token: token, folder: location.linkID)
         else { return items }
