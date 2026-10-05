@@ -128,24 +128,26 @@ final class AppSession {
         await completeSignIn()
     }
 
-    /// Completes a 2FA-gated login (TOTP code), then the same unlock path.
+    /// Completes a 2FA-gated login (TOTP or recovery code — both go in the
+    /// same `TwoFactorCode` field, see TwoFactorCodeInput), then the same
+    /// unlock path.
     /// F8.2-R7: a wrong code (or a network blip) keeps the prompt up with
     /// an inline error, the half-open session and the retained password —
     /// re-entering the password would cost another login against Proton's
     /// 2028 rate limit. Only unrecoverable failures (session gone, rate
     /// limited, human verification) sign out, with the full cleanup.
-    func submitTwoFactor(code: String) async {
+    func submitTwoFactor(code: String, mode: TwoFactorCodeInput.Mode = .authenticator) async {
         guard phase == .needsTwoFactor, !isVerifyingTwoFactor else { return }
         isVerifyingTwoFactor = true
         twoFactorError = nil
         do {
-            try await sessions.submit2FA(code: code)
+            try await sessions.submit2FA(code: TwoFactorCodeInput.filter(code, mode: mode))
         } catch {
             isVerifyingTwoFactor = false
             // Signed out / cancelled while the request was in flight.
             guard phase == .needsTwoFactor else { return }
             if TwoFactorFailure.isRecoverable(error) {
-                twoFactorError = TwoFactorFailure.message(for: error)
+                twoFactorError = TwoFactorFailure.message(for: error, mode: mode)
             } else {
                 await abortSignIn(reason: UserFacingError.message(for: error))
             }
@@ -155,6 +157,13 @@ final class AppSession {
         guard phase == .needsTwoFactor else { return }
         phase = .unlocking
         await completeSignIn()
+    }
+
+    /// The prompt switched between authenticator and recovery code: the
+    /// previous mode's error no longer applies (F8.4-U5).
+    func clearTwoFactorError() {
+        guard !isVerifyingTwoFactor else { return }
+        twoFactorError = nil
     }
 
     /// Backs out of the 2FA prompt — a plain sign-out with no error message.

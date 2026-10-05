@@ -1,7 +1,10 @@
 // Nucleon Transfer — login screen (F7 S4.1, spec 6.6).
 // Centered auth card: app icon + title, grouped credentials form, inline
 // error (announced to VoiceOver), prominent Sign In that swaps to a
-// spinner while SRP runs, then the third-party disclaimer. Credentials go
+// "Signing in…" spinner while SRP + bcrypt run (fields locked meanwhile),
+// links to Proton's password-reset and sign-up pages, then the
+// third-party disclaimer. A failed attempt refocuses the (already
+// cleared) password field (F8.4-U5). Credentials go
 // to AppSession; the password field clears on submit — the retained copy
 // lives as zeroed-after-use Data inside AppSession.pendingPassword. The
 // field's own String storage cannot be wiped (Swift strings are immutable
@@ -22,6 +25,16 @@ struct LoginView: View {
     /// SRP handshake in flight: the button swaps to a spinner and disables.
     private var isSigningIn: Bool {
         session.phase == .signingIn
+    }
+
+    private var trimmedUsername: String {
+        username.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Return and Sign In only act on a complete form (F8.4-U5): Return in
+    /// the password field with no username must not start an SRP round.
+    private var canSubmit: Bool {
+        !trimmedUsername.isEmpty && !password.isEmpty && !isSigningIn
     }
 
     var body: some View {
@@ -47,6 +60,7 @@ struct LoginView: View {
                 .textFieldStyle(.roundedBorder)
                 .controlSize(.large)
                 .focused($focus, equals: .username)
+                .disabled(isSigningIn)
                 .onSubmit { focus = .password }
                 .accessibilityLabel("Email or username")
                 SecureField(
@@ -58,6 +72,7 @@ struct LoginView: View {
                 .textFieldStyle(.roundedBorder)
                 .controlSize(.large)
                 .focused($focus, equals: .password)
+                .disabled(isSigningIn)
                 .onSubmit(signIn)
                 .accessibilityLabel("Password")
             }
@@ -72,8 +87,11 @@ struct LoginView: View {
             Button(action: signIn) {
                 Group {
                     if isSigningIn {
-                        ProgressView()
-                            .controlSize(.small)
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Signing in…")
+                        }
                     } else {
                         Text("Sign In")
                     }
@@ -83,9 +101,18 @@ struct LoginView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
-            .accessibilityLabel(isSigningIn ? "Signing In" : "Sign In")
-            .disabled(username.isEmpty || password.isEmpty || isSigningIn)
+            .accessibilityLabel(isSigningIn ? Text("Signing in…") : Text("Sign In"))
+            .disabled(!canSubmit)
             .frame(width: 360)
+            HStack(spacing: 16) {
+                if let url = AccountLinks.resetPassword {
+                    Link("Forgot password?", destination: url)
+                }
+                if let url = AccountLinks.createAccount {
+                    Link("Create account", destination: url)
+                }
+            }
+            .font(.callout)
             Divider()
                 .frame(width: 360)
             Text("Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored.")
@@ -104,7 +131,9 @@ struct LoginView: View {
             if username.isEmpty, let loginUsername = session.loginUsername {
                 username = loginUsername
             }
-            focus = .username
+            // Back from a failed 2FA/unlock with the username kept: the
+            // password is what needs retyping.
+            focus = session.loginError != nil && !username.isEmpty ? .password : .username
             // A 2FA failure lands back here with the error already set —
             // onChange missed it while the view was unmounted, so announce
             // it on appear too.
@@ -112,13 +141,24 @@ struct LoginView: View {
         }
         .onChange(of: session.loginError) { _, error in
             announce(error)
+            if error != nil, !isSigningIn { focus = .password }
+        }
+        .onChange(of: isSigningIn) { _, signingIn in
+            // The fields were disabled during SRP; after a failure the
+            // (already cleared) password field gets focus back.
+            if !signingIn, session.loginError != nil { focus = .password }
         }
     }
 
     /// Captures the credentials and hands them to AppSession; the field
     /// copy clears up front (the retained bytes live in pendingPassword).
     private func signIn() {
-        let name = username
+        guard canSubmit else {
+            // Return in the password field with no username: go fill it.
+            if trimmedUsername.isEmpty, !isSigningIn { focus = .username }
+            return
+        }
+        let name = trimmedUsername
         let pwd = password
         password = ""
         Task { await session.signIn(username: name, password: pwd) }
