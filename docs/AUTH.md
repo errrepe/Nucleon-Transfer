@@ -1,4 +1,4 @@
-# AUTH — SRP, 2FA, Session (memória, sem Keychain)
+# AUTH — SRP, 2FA, Session (memória; login salvo opcional no Keychain)
 
 > Endpoints oficiais apenas. Header obrigatório: `x-pm-appversion: external-drive-nucleon_transfer@0.1.0-alpha`.
 
@@ -48,7 +48,9 @@
 
 6. Sessão em memória:
    `ProtonSession{uid,accessToken,refreshToken}` só no `SessionManager` actor.
-   Sem Keychain, sem disco — re-login a cada launch (como o app oficial).
+   Por padrão nada vai ao disco — re-login a cada launch. Com "Keep me
+   signed in" (opt-in), UID + refresh token + senha salgada vão para o
+   Keychain e o launch restaura a sessão (§4.1, ADR-004).
 
 7. Refresh (reativo, sem timer):
    POST /auth/v4/refresh { RefreshToken, UID }
@@ -103,13 +105,15 @@
 - Erros comuns: `8002` (código inválido/expirado), `8101` (muitas tentativas → backoff).
 - Fora de escopo MVP: FIDO2 / hardware key enrollment. Mensagem clara se conta exigir.
 
-## 4. Sessão em memória (sem Keychain)
+## 4. Sessão em memória (login salvo opcional)
 
-- Como o app oficial: sessão (`ProtonSession{uid,accessToken,refreshToken}`,
+- Por padrão: sessão (`ProtonSession{uid,accessToken,refreshToken}`,
   `SessionManager` actor) vive SÓ em memória e morre no logout/quit.
   Re-login a cada launch; refresh single-flight (sob demanda, no 401)
   mantém a sessão viva.
-- Nunca em Keychain, UserDefaults, SwiftData, plist, logs, crash reports.
+- O access token nunca sai da memória. Tokens nunca em UserDefaults,
+  SwiftData, plist, logs, crash reports. Única exceção, opt-in: o item do
+  Keychain do "Keep me signed in" (§4.1).
 - Seeds destravadas idem: só em `KeyringCache` (memória), `lock()` zera e limpa.
 - Zeragem é best-effort (`SecureBytes`, `memset_s`): o app zera os buffers
   que possui (estado do bcrypt, hash da senha, senha salgada, passphrases
@@ -117,6 +121,41 @@
   cópias feitas pelo runtime, objetos de chave do CryptoKit e `Data` ainda
   compartilhada (copy-on-write) não têm garantia de zeragem — só são
   liberadas.
+
+### 4.1 Ciclo de vida do login salvo (F8.5, ADR-004)
+
+- **Gravação:** depois de um login completo com senha (inclusive 2FA) e do
+  desbloqueio das chaves, se "Keep me signed in" estiver ligado,
+  `SessionVault` grava `RememberedSession` v1 (`uid`, `refreshToken`,
+  `saltedKeyPass`, `username`, `savedAt`) num item do Keychain de data
+  protection (`WhenUnlockedThisDeviceOnly`, não sincronizável). Desligado →
+  o item é apagado. Com "Require Touch ID", o blob é selado em AES-GCM sob
+  uma KEK aleatória guardada num 2º item com
+  `SecAccessControl(.biometryCurrentSet)`; se o Touch ID estiver
+  indisponível nessa hora, nada é gravado.
+- **Restore (launch, fase `.restoring`):** (1) se selado, Touch ID lê a KEK
+  — cancelar/indisponível mantém os itens e mostra "Use Touch ID";
+  digitais alteradas / KEK ausente / blob que não abre apagam os dois
+  itens; (2) `SessionManager.restore(uid:refreshToken:)` instala a sessão
+  sem access token e roda o refresh single-flight; (3) o mesmo
+  `finishUnlock` do login com senha, com a `saltedKeyPass` guardada.
+  Falha de rede mantém o item (Try Again, sem revogar no servidor);
+  401 / refresh recusado / falha de unlock ou de assinatura apagam o item
+  (`RestoreFailure`).
+- **Refresh sem AccessToken:** o corpo do `POST /auth/v4/refresh` de um
+  restore omite o campo `AccessToken` (a sessão restaurada ainda não tem
+  um); o resto é idêntico ao refresh do 401. **Live check pendente:**
+  confirmar contra a Proton que esse corpo é aceito.
+- **Rotação:** o observer de tokens do `SessionManager` grava cada refresh
+  token novo no item enquanto ele pertence à sessão viva (no modo Touch ID,
+  re-selado com a KEK em memória, sem novo prompt). Um refresh nunca cria
+  item.
+- **Sign-out:** apaga os itens PRIMEIRO — antes de qualquer chamada de rede
+  e antes de soltar as chaves — e descarta a KEK da memória; depois
+  cancela transferências, revoga a sessão (`DELETE /auth/v4`,
+  best-effort), zera as seeds.
+- **Settings › Account › Forget This Mac:** apaga os dois itens e o último
+  username, sem encerrar a sessão atual.
 
 ## 5. Erros comuns
 
@@ -146,5 +185,6 @@
 ## 8. Segurança
 
 - Zero telemetria de credenciais. Nenhum log com tokens/keys.
-- `AccessToken` e `RefreshToken` só em memória (`SessionManager` actor).
+- `AccessToken` só em memória (`SessionManager` actor). `RefreshToken` só
+  em memória, exceto no item opt-in do Keychain (§4.1).
 - Veja `SECURITY.md`.

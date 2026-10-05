@@ -21,13 +21,16 @@ server-side allowlist — see Known limitations.)
 ## Status
 
 `0.1.0-alpha`. All crypto, networking and the native UI are implemented and
-verified; the offline test suite is green (`swift test`, 565 tests). This is an
+verified; the offline test suite is green (`swift test`, 634 tests). This is an
 alpha: expect rough edges and read the known limitations below.
 
 ## Features
 
 - **Sign in** with your Proton account (SRP-6a), two-factor with an
   authenticator code or a recovery code, automatic session refresh.
+- **Keep me signed in** (opt-in): resume the session on relaunch without
+  the password, optionally gated by **Touch ID**; "Forget This Mac" in
+  Settings › Account removes it.
 - **Browse** My Files, Photos (read-only) and Computers in a native
   `NavigationSplitView` + `Table` browser: navigate folders with
   Back/Forward, an optional path bar, sortable Name/Kind/Size/Modified
@@ -42,7 +45,8 @@ alpha: expect rough edges and read the known limitations below.
   straight to a default folder — several at once, each cancellable,
   mirrors the remote tree, verifies SHA-256 per block, atomic writes.
 - **Settings**: default download folder, simultaneous uploads/downloads,
-  open Transfers on start, ask before moving to Trash.
+  open Transfers on start, ask before moving to Trash; Account: keep me
+  signed in, require Touch ID, forget this Mac.
 - **Localized** in English and Brazilian Portuguese (pt-BR) via a String
   Catalog (`Resources/Localizable.xcstrings`); the app follows the macOS
   language setting.
@@ -77,10 +81,19 @@ plus `NucleonTransfer/NucleonTransferTests/` directly.
 
 ## Security model
 
-- **Memory only.** Access/refresh tokens, the salted key password, unlocked
-  keys and session seeds live in actors in memory. Nothing is written to
-  Keychain, UserDefaults or plists — signing in again is required on every
-  launch, like the official app.
+- **Memory only by default.** Access/refresh tokens, the salted key
+  password, unlocked keys and session seeds live in actors in memory.
+  Without "Keep me signed in" no secret is written to the Keychain,
+  UserDefaults or plists and every launch asks for the password.
+- **Keep me signed in (opt-in, off by default)** stores the refresh token,
+  its UID, the salted key password and the username in one item of the
+  macOS data-protection keychain — this Mac only
+  (`WhenUnlockedThisDeviceOnly`), never synced to iCloud. Never stored:
+  the password, the access token, unlocked keys. With **Require Touch
+  ID**, that item is sealed (AES-GCM) under a random key kept in a second
+  item that only Touch ID with a currently enrolled finger can read;
+  changing your fingerprints removes the saved sign-in. Sign-out deletes
+  the items before anything else. See `docs/DECISIONS/ADR-004-remember-me.md`.
 - The password is kept as `Data` only between sign-in and the key unlock,
   and that buffer is zeroed on every exit path (success, error, cancel,
   sign-out). Buffers the app owns — bcrypt state, the password hash, the
@@ -91,8 +104,10 @@ plus `NucleonTransfer/NucleonTransferTests/` directly.
   dropped, not wiped.
 - **Sign-out** revokes the session server-side (`DELETE /auth/v4`,
   best-effort) and drops all in-memory key material, zeroing what it owns.
-- **On disk:** only the upload queue (`transfer-queue.json` under
-  Application Support) — paths, IDs and progress, no secrets.
+- **On disk:** the upload queue (`transfer-queue.json` under Application
+  Support — paths, IDs and progress, no secrets), preferences and the last
+  username (UserDefaults, not secret), and — only when opted in — the
+  Keychain items above.
 - No telemetry, no analytics, no third-party crash reporters.
 - Every request sends an honest `x-pm-appversion:
   external-drive-nucleon_transfer@0.1.0-alpha` header — the app never
