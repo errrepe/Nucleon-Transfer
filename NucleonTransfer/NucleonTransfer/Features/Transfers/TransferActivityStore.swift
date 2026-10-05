@@ -32,6 +32,10 @@ final class TransferActivityStore {
     /// Set by UploadCoordinator on intake (S3.1); S3.2's toolbar button
     /// binds the transfers popover to this flag.
     var presentTransfers = false
+    /// Bumped whenever an upload or download batch starts, whether or not
+    /// the popover opens for it — the toolbar button bounces on it while
+    /// the popover is closed. Only ever goes up.
+    private(set) var transfersStarted = 0
     /// Smoothed byte rates by transfer id (F8.4-U6). Observed, so the
     /// popover re-renders as samples land.
     private(set) var rates = TransferRateBook()
@@ -144,6 +148,12 @@ final class TransferActivityStore {
     /// remote mutation touched (folder create, trash, upload enqueue/done).
     /// Browsers keyed on `remoteChangedToken` call `markStale` — only the
     /// affected folders refetch, and only on demand.
+    /// An upload/download batch started (UploadCoordinator intake,
+    /// DownloadCoordinator batch) — see `transfersStarted`.
+    func noteTransferStarted() {
+        transfersStarted += 1
+    }
+
     func remoteChanged(parentLinkIDs: [String]) {
         remoteChangedParents.formUnion(parentLinkIDs)
         remoteChangedToken += 1

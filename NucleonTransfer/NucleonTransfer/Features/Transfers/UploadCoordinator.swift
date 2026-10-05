@@ -215,6 +215,7 @@ final class UploadCoordinator {
                 // Folder creation happened inside enqueueTree (parent→child):
                 // the remote tree changed under the destination.
                 activity.remoteChanged(parentLinkIDs: [destination.linkID])
+                activity.noteTransferStarted()
                 if AppSettings.opensTransfersOnStart(.standard) {
                     activity.presentTransfers = true
                 }

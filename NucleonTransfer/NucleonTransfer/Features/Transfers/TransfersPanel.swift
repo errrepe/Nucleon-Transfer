@@ -7,6 +7,9 @@
 // F8.4-U6: inset list, section headers with counts ("Failed (3)") and a
 // once-a-second tick while anything is in flight, so speed/ETA refresh
 // (and fade out when a transfer stalls) between progress snapshots.
+// Polish pass: rows animate as they move between sections or leave
+// ("Clear Finished"), the empty state crossfades with the list, section
+// counts roll and the intake-error footer fades in.
 import SwiftUI
 
 struct TransfersPanel: View {
@@ -38,6 +41,7 @@ struct TransfersPanel: View {
     /// nil hides speed/ETA. Defaults to none for previews.
     var bytesPerSecond: (String, Date) -> Double? = { _, _ in nil }
     var handlers = Handlers()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private func sections(at now: Date) -> [TransferDisplaySection] {
         TransferDisplay.sections(
@@ -72,17 +76,21 @@ struct TransfersPanel: View {
             Divider()
             content
             if let lastError, !lastError.isEmpty {
-                Divider()
-                Text(lastError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-                    .help(lastError)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                VStack(spacing: 0) {
+                    Divider()
+                    Text(lastError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                        .help(lastError)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                }
+                .transition(.opacity)
             }
         }
+        .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: lastError)
         .frame(width: 380, height: 440, alignment: .top)
     }
 
@@ -125,25 +133,46 @@ struct TransfersPanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    @ViewBuilder
     private func list(_ sections: [TransferDisplaySection]) -> some View {
+        listContent(sections)
+            // Animate membership changes only — not every 1 s tick.
+            .animation(
+                Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion),
+                // Membership per section, order-free: Active is sorted by
+                // updatedAt, which moves on every job start — keying on
+                // display order would shuffle rows during a big upload.
+                value: sections.map { Set($0.items.map(\.id)) }
+            )
+    }
+
+    @ViewBuilder
+    private func listContent(_ sections: [TransferDisplaySection]) -> some View {
         if sections.isEmpty {
             ContentUnavailableView(
                 "No Transfers",
                 systemImage: "arrow.up.arrow.down",
                 description: Text("Files you upload or download appear here.")
             )
+            .transition(.opacity)
         } else {
             List {
                 ForEach(sections) { section in
-                    Section(section.title) {
+                    Section {
                         ForEach(section.items) { item in
                             TransferRow(item: item, actions: actions(for: item))
                         }
+                    } header: {
+                        // "Failed (3)": the count rolls as rows come and go
+                        // (it only changes with membership, never per tick).
+                        Text(section.title)
+                            .contentTransition(Motion.numeric(
+                                Double(section.items.count), reduceMotion: reduceMotion
+                            ))
                     }
                 }
             }
             .listStyle(.inset)
+            .transition(.opacity)
         }
     }
 

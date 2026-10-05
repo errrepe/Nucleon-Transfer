@@ -16,6 +16,9 @@
 // session couldn't be restored for lack of network.
 // F8.5-V3: a "Use Touch ID" button when the Touch ID prompt for a sealed
 // remembered session was cancelled (or unavailable) — the session is kept.
+// Polish pass: a rejected sign-in shakes the credentials like the macOS
+// login window, the error and retry buttons ease in, and the Sign In
+// label crossfades to its spinner (all reduced under Reduce Motion).
 import AppKit // NSApp.applicationIconImage — header icon
 import SwiftUI
 
@@ -28,6 +31,9 @@ struct LoginView: View {
     @State private var username = ""
     @State private var password = ""
     @FocusState private var focus: Field?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Bumped on each failed attempt — drives the credentials shake.
+    @State private var shakeCount = 0
 
     private enum Field {
         case username, password
@@ -93,12 +99,14 @@ struct LoginView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(width: 360)
+            .shake(trigger: shakeCount)
             if let error = session.loginError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: 360)
+                    .transition(Motion.inline(reduceMotion: reduceMotion))
             }
             if session.canRetryRestore {
                 // The remembered session survived a network failure:
@@ -107,6 +115,7 @@ struct LoginView: View {
                     Task { await session.restoreRememberedSession() }
                 }
                 .disabled(isSigningIn)
+                .transition(.opacity)
             }
             if session.canRetryTouchID {
                 Button {
@@ -115,17 +124,22 @@ struct LoginView: View {
                     Label("Use Touch ID", systemImage: "touchid")
                 }
                 .disabled(isSigningIn)
+                .transition(.opacity)
             }
             Button(action: signIn) {
-                Group {
+                // ZStack, not Group: mid-crossfade both labels overlap
+                // instead of stacking and growing the button.
+                ZStack {
                     if isSigningIn {
                         HStack(spacing: 6) {
                             ProgressView()
                                 .controlSize(.small)
                             Text("Signing in…")
                         }
+                        .transition(.opacity)
                     } else {
                         Text("Sign In")
+                            .transition(.opacity)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -154,6 +168,10 @@ struct LoginView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 380)
         }
+        .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: session.loginError)
+        .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: isSigningIn)
+        .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: session.canRetryRestore)
+        .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: session.canRetryTouchID)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .frame(minWidth: 420, minHeight: 320)
         .task {
@@ -174,6 +192,7 @@ struct LoginView: View {
         }
         .onChange(of: session.loginError) { _, error in
             announce(error)
+            if error != nil, !reduceMotion { shakeCount += 1 }
             if error != nil, !isSigningIn { focusFirstEmptyField() }
         }
         .onChange(of: isSigningIn) { _, signingIn in

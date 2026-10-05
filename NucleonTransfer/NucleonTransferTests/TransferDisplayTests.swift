@@ -311,10 +311,13 @@ struct TransferDisplayTests {
         let failed = TransferDisplay.item(for: job(state: .failed), destinationName: nil)
         let cancelled = TransferDisplay.item(for: record(state: .cancelled))
         let done = TransferDisplay.item(for: record(state: .done))
+        let active = TransferDisplay.item(for: record(state: .downloading))
         #expect(failed.statusSymbol == "exclamationmark.triangle.fill")
         #expect(cancelled.statusSymbol == "xmark.circle")
         #expect(cancelled.isCancelled && !cancelled.isFailed)
-        #expect(done.statusSymbol == nil)
+        #expect(done.statusSymbol == "checkmark.circle")
+        #expect(done.isDone && !failed.isDone && !cancelled.isDone)
+        #expect(active.statusSymbol == nil && !active.isDone)
     }
 
     @Test func accessibilityValuePrefixesFailures() {

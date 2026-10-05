@@ -82,7 +82,9 @@ final class DownloadCoordinator {
             drive: drive, addressKeys: addressKeys, resolver: resolver
         )
         // Mirror UploadCoordinator's intake: show the popover so the
-        // user sees the download start (records land as items begin).
+        // user sees the download start (records land as items begin) —
+        // or, with that setting off, let the toolbar button bounce.
+        activity.noteTransferStarted()
         if AppSettings.opensTransfersOnStart(.standard) {
             activity.presentTransfers = true
         }

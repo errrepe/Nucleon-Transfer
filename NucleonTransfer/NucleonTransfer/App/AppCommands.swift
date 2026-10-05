@@ -1,19 +1,14 @@
 // Nucleon Transfer — menu bar commands (F7 S4.2).
-// One menu bar, one window: commands reach the focused scene's state via
-// @FocusedValue — FolderView publishes its BrowserModel, RootView the
-// AppSession, and StorageFooterView its sign-out request (so the menu's
-// "Sign Out…" lands on the same confirmationDialog, including the
-// active-transfers warning). Every item disables itself when it doesn't
+// One menu bar, one window: browser commands reach the focused scene's
+// BrowserModel via @FocusedValue. App-level commands (Sign Out, Show
+// Transfers) take the app's single AppSession by parameter, so they keep
+// working while the Settings window is key (a focused value is nil
+// there — live audit). "Sign Out…" brings the main window forward and
+// lands on the sidebar footer's confirmationDialog, including the
+// active-transfers warning. Every item disables itself when it doesn't
 // apply: no browser, empty selection, read-only root, signed out.
 import AppKit
 import SwiftUI
-
-/// Sign-out request value: the sidebar footer's `beginSignOut` closure.
-/// Declared as a FocusedValueKey (not @Entry) — @Entry warns about
-/// storing closures, which aren't comparable.
-private struct RequestSignOutFocusedKey: FocusedValueKey {
-    typealias Value = @MainActor () -> Void
-}
 
 extension FocusedValues {
     /// The BrowserModel of the focused browser scene (nil while signed
@@ -22,31 +17,25 @@ extension FocusedValues {
     /// The browser's filter field has keyboard focus (F8.4-U3) — Move to
     /// Trash steps aside so ⌘⌫ deletes to line start in the field.
     @Entry var browserSearchFocused: Bool?
-    /// The AppSession of the focused scene — for app-level commands
-    /// (Show Transfers, Sign Out) that outlive any single browser.
-    @Entry var appSession: AppSession?
-    /// Sign-out request published by the sidebar account footer — it
-    /// runs the footer's `beginSignOut` (active-transfers check, then
-    /// the confirmationDialog) so the menu path keeps the same UX.
-    var requestSignOut: (@MainActor () -> Void)? {
-        get { self[RequestSignOutFocusedKey.self] }
-        set { self[RequestSignOutFocusedKey.self] = newValue }
-    }
 }
 
 struct AppCommands: Commands {
     @FocusedValue(\.browserModel) private var focusedBrowser
     @FocusedValue(\.browserSearchFocused) private var searchFocused
     @AppStorage(BrowserPreferences.showPathBarKey) private var showPathBar = false
-    @FocusedValue(\.appSession) private var session
-    @FocusedValue(\.requestSignOut) private var requestSignOut
+    /// The app's one session (NucleonTransferApp) — not a focused value,
+    /// which goes nil while the Settings window is key.
+    let session: AppSession
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         // App menu — custom About with the 6.6 disclaimer in the credits.
         CommandGroup(replacing: .appInfo) {
             Button("About Nucleon Transfer") {
                 NSApp.orderFrontStandardAboutPanel(options: [
-                    .credits: NSAttributedString(string: AboutContent.disclaimer)
+                    // CFBundleName is the target name ("NucleonTransfer").
+                    .applicationName: AboutContent.appName,
+                    .credits: AboutContent.panelCredits,
                 ])
             }
         }
@@ -139,10 +128,10 @@ struct AppCommands: Commands {
             // The popover anchors to the toolbar button inside FolderView,
             // so it needs a live browser — not just a signed-in session.
             Button("Show Transfers") {
-                session?.activity.presentTransfers = true
+                session.activity.presentTransfers = true
             }
             .keyboardShortcut("t", modifiers: [.command, .option])
-            .disabled(session?.phase != .signedIn || browser == nil)
+            .disabled(session.phase != .signedIn || browser == nil)
 
             // F8.4-U3: Finder's path bar, persisted in @AppStorage.
             Button(showPathBar ? "Hide Path Bar" : "Show Path Bar") {
@@ -153,14 +142,15 @@ struct AppCommands: Commands {
         }
 
         // App menu, after Settings… — same confirm flow as the account
-        // footer (its closure is published while the shell is on screen);
-        // signed-in-but-no-footer states (root load error) fall back to a
-        // direct sign-out so the menu item never dead-ends.
+        // footer while the shell (and so the footer) is up; other states
+        // (2FA prompt, root load error) sign out directly so the menu item
+        // never dead-ends.
         CommandGroup(after: .appSettings) {
             Button("Sign Out…") {
-                if let requestSignOut {
-                    requestSignOut()
-                } else if let session {
+                if session.phase == .signedIn, session.roots != nil {
+                    openWindow(id: "main")
+                    session.signOutRequested = true
+                } else {
                     Task { await session.signOut() }
                 }
             }
@@ -225,7 +215,6 @@ struct AppCommands: Commands {
     /// cancel path there). Disabled mid-signIn/unlock and while a 2FA code
     /// is being verified — the in-flight work must finish or fail on its own.
     private var canSignOut: Bool {
-        guard let session else { return false }
         if session.phase == .signedIn { return true }
         return session.phase == .needsTwoFactor && !session.isVerifyingTwoFactor
     }

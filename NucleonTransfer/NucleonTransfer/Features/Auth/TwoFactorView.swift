@@ -7,6 +7,9 @@
 // and lands on the login screen. F8.4-U5: "Use a recovery code instead"
 // relaxes the field to a free-form single-use backup code (same Proton
 // field — see TwoFactorCodeInput), submitted with Return / Verify.
+// Polish pass: a rejected code shakes the field, the shield symbol
+// bounces in on appear, and the mode switch / verifying / error states
+// animate instead of jumping (reduced under Reduce Motion).
 import SwiftUI
 
 struct TwoFactorView: View {
@@ -14,6 +17,11 @@ struct TwoFactorView: View {
     @State private var code = ""
     @State private var mode: TwoFactorCodeInput.Mode = .authenticator
     @FocusState private var codeFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Bumped on each rejected code — drives the field shake.
+    @State private var shakeCount = 0
+    /// Flipped on appear so the shield bounces once.
+    @State private var appeared = false
 
     private var isVerifying: Bool { session.isVerifyingTwoFactor }
     private var isRecovery: Bool { mode == .recoveryCode }
@@ -23,20 +31,20 @@ struct TwoFactorView: View {
             Image(systemName: "lock.shield")
                 .font(.system(size: 40))
                 .foregroundStyle(.tint)
+                .symbolEffect(.bounce, value: reduceMotion ? false : appeared)
                 .accessibilityHidden(true)
             Text("Two-Factor Authentication")
                 .font(.title2.weight(.semibold))
-            Group {
-                if isRecovery {
-                    Text("Enter one of the recovery codes you saved when you turned on two-factor authentication. Each code works only once.")
-                } else {
-                    Text("Enter the 6-digit code from your authenticator app.")
-                }
-            }
+            // One Text value (not an if/else of two) so the copy crossfades
+            // in place instead of both versions stacking mid-transition.
+            (isRecovery
+                ? Text("Enter one of the recovery codes you saved when you turned on two-factor authentication. Each code works only once.")
+                : Text("Enter the 6-digit code from your authenticator app."))
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: 360)
+            .contentTransition(.opacity)
             TextField(
                 isRecovery ? "Recovery code" : "Authentication code",
                 text: $code,
@@ -59,6 +67,7 @@ struct TwoFactorView: View {
             }
             .onSubmit(verify)
             .accessibilityLabel(isRecovery ? "Recovery code" : "Authentication code")
+            .shake(trigger: shakeCount)
             if isVerifying {
                 HStack(spacing: 6) {
                     ProgressView()
@@ -68,12 +77,14 @@ struct TwoFactorView: View {
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Verifying code…")
+                .transition(.opacity)
             } else if let error = session.twoFactorError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: 360)
+                    .transition(Motion.inline(reduceMotion: reduceMotion))
             }
             HStack(spacing: 12) {
                 Button("Back") {
@@ -86,21 +97,31 @@ struct TwoFactorView: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(!TwoFactorCodeInput.isComplete(code, mode: mode) || isVerifying)
             }
-            Button(isRecovery ? "Use authenticator code instead" : "Use a recovery code instead") {
+            Button {
                 switchMode()
+            } label: {
+                (isRecovery ? Text("Use authenticator code instead") : Text("Use a recovery code instead"))
+                    .contentTransition(.opacity)
             }
             .buttonStyle(.link)
             .font(.callout)
             .disabled(isVerifying)
         }
+        .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: mode)
+        .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: isVerifying)
+        .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: session.twoFactorError)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .frame(minWidth: 420, minHeight: 320)
-        .task { codeFocused = true }
+        .task {
+            codeFocused = true
+            appeared = true
+        }
         .onChange(of: session.twoFactorError) { _, error in
             guard let error else { return }
             // A rejected code: start over in place.
             code = ""
             codeFocused = true
+            if !reduceMotion { shakeCount += 1 }
             AccessibilityNotification.Announcement(error).post()
         }
         .onChange(of: isVerifying) { _, verifying in

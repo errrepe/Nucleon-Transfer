@@ -34,7 +34,7 @@ struct NucleonTransferApp: App {
         .defaultSize(width: 1100, height: 700)
         .windowToolbarStyle(.unified)
         .commands {
-            AppCommands()
+            AppCommands(session: session)
             // F8.5-V3: empty in release builds (#if DEBUG inside).
             DebugCommands()
         }

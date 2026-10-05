@@ -31,11 +31,15 @@ struct TransferDisplayItem: Identifiable, Sendable, Equatable {
     var isCancelled = false
     let updatedAt: Date
 
-    /// SF Symbol shown beside the subtitle so failure/cancellation reads
-    /// without color (F8.4-U8); nil for every other state.
+    /// Finished successfully (Completed section).
+    var isDone: Bool { !isActive && !isFailed && !isCancelled }
+
+    /// SF Symbol shown beside the subtitle so the end state reads without
+    /// color (F8.4-U8): failed, cancelled or done; nil while in flight.
     var statusSymbol: String? {
         if isFailed { return "exclamationmark.triangle.fill" }
         if isCancelled { return "xmark.circle" }
+        if isDone { return "checkmark.circle" }
         return nil
     }
 

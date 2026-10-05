@@ -7,11 +7,18 @@
 // native NSToolbarItem badge (NSItemBadge: count / text / indicator only,
 // system size and color), drawn OUTSIDE the glass capsule. Per the HIG a
 // badge counts what needs attention, so it shows only the FAILED count;
-// work in flight pulses the icon instead (Safari's downloads button shows
+// work in flight animates the icon instead (Safari's downloads button shows
 // progress on the icon, not a badge). Tooltip + VoiceOver carry both
 // counts (F8.4-U6 — never color or motion alone). Upload speed
 // samples come from UploadCoordinator's snapshot listener (F8.4-U7b), not
 // from this view.
+// Polish pass: the icon bounces once whenever the failed count changes,
+// so the badge change is noticed without a persistent animation. Pass 3:
+// it also bounces when a transfer starts while the popover is closed
+// ("Open Transfers when a transfer starts" off) — like Safari's
+// downloads button. Pass 4: when the last transfer finishes with nothing
+// failed, a checkmark is drawn in for a beat, then the arrows return;
+// work in flight breathes rather than pulses.
 import AppKit
 import SwiftUI
 
@@ -21,6 +28,11 @@ struct TransfersToolbarButton: View {
     /// object injected outside the NavigationStack can be missing
     /// (crash B1: EnvironmentValues assert on a background-hosted item).
     let session: AppSession
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Advances when a transfer starts with the popover closed.
+    @State private var startBounces = 0
+    /// True for a beat after everything finished cleanly.
+    @State private var showsAllDone = false
 
     private var badgeState: TransferBadge {
         TransferDisplay.badge(
@@ -34,11 +46,34 @@ struct TransfersToolbarButton: View {
         Button {
             activity.presentTransfers.toggle()
         } label: {
-            Label("Transfers", systemImage: "arrow.up.arrow.down")
-                .symbolEffect(.pulse, options: .repeating, isActive: isInFlight)
+            Label {
+                Text("Transfers")
+            } icon: {
+                glyph
+            }
+            // Pass 4: breathe, not pulse — the icon swells gently while
+            // work is in flight instead of blinking.
+            .symbolEffect(.breathe, options: .repeating, isActive: isInFlight && !reduceMotion)
+            .symbolEffect(.pulse, options: .repeating, isActive: isInFlight && reduceMotion)
+                .symbolEffect(.bounce, value: reduceMotion ? 0 : failedCount)
+                .symbolEffect(.bounce, value: reduceMotion ? 0 : startBounces)
         }
         // 0 hides the badge.
         .badge(failedCount)
+        .onChange(of: activity.transfersStarted) {
+            // The popover opening already shows the start.
+            if !activity.presentTransfers { startBounces += 1 }
+        }
+        .onChange(of: isInFlight) { wasInFlight, inFlight in
+            // A new transfer during the beat takes the icon back at once.
+            let allDone = wasInFlight && !inFlight && failedCount == 0
+            withAnimation(Motion.snappy) { showsAllDone = allDone }
+        }
+        .task(id: showsAllDone) {
+            guard showsAllDone else { return }
+            try? await Task.sleep(for: Motion.symbolBeat)
+            withAnimation(Motion.snappy) { showsAllDone = false }
+        }
         // M4: match the View-menu wording ("Show Transfers") and say
         // what the button does; the active/failed count rides along. The
         // AX label keeps the shorter "Transfers" form.
@@ -56,6 +91,27 @@ struct TransfersToolbarButton: View {
             // environment — popover content is hosted off-hierarchy too.
             panel
                 .environment(session)
+        }
+    }
+
+    /// The arrows, or for a beat after everything finished cleanly a
+    /// checkmark drawn in like a pen stroke (crossfade under Reduce Motion).
+    @ViewBuilder
+    private var glyph: some View {
+        if showsAllDone {
+            let check = Image(systemName: "checkmark.circle")
+            if reduceMotion {
+                check.transition(.opacity)
+            } else {
+                check.transition(.symbolEffect(.drawOn))
+            }
+        } else {
+            let arrows = Image(systemName: "arrow.up.arrow.down")
+            if reduceMotion {
+                arrows.transition(.opacity)
+            } else {
+                arrows.transition(.symbolEffect(.appear))
+            }
         }
     }
 

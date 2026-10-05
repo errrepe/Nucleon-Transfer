@@ -21,6 +21,7 @@ struct DebugCommands: Commands {
             // Demo Mode.
             Button("Simulate Uploads Blocked") {
                 DebugOverrides.shared.uploadsBlocked.toggle()
+                DebugOverrides.shared.uploadsBannerDismissed = false
             }
         }
         #else
@@ -35,6 +36,9 @@ struct DebugCommands: Commands {
 final class DebugOverrides {
     static let shared = DebugOverrides()
     var uploadsBlocked = false
+    /// The banner's close button in Demo Mode — there is no
+    /// UploadCoordinator to remember it.
+    var uploadsBannerDismissed = false
 }
 
 extension DebugCommands {

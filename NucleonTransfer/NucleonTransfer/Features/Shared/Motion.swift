@@ -1,0 +1,142 @@
+// Nucleon Transfer — shared motion vocabulary (UI polish pass).
+// One place for the app's animation curves and transitions so every
+// screen moves the same way: short, system-like springs for state swaps,
+// a top-edge slide for banners, a soft fade + scale for full-screen
+// phases. Everything collapses to a plain crossfade (or nothing) under
+// System Settings ▸ Accessibility ▸ Display ▸ Reduce motion — callers
+// read `accessibilityReduceMotion` and pass it in.
+import AppKit
+import SwiftUI
+
+enum Motion {
+    /// State swaps inside one screen (overlay states, inline errors,
+    /// button content). Quick enough to never delay input.
+    static let snappy = Animation.snappy(duration: 0.25)
+    /// Larger layout changes (banners, phase switches).
+    static let smooth = Animation.smooth(duration: 0.35)
+
+    /// How long a toolbar symbol holds its "done" form (a filled trash,
+    /// a checkmark) before swapping back — long enough to be seen.
+    static let symbolBeat: Duration = .milliseconds(1600)
+    /// Symbol effects run a little slower than the system default: at
+    /// full speed the toolbar gestures read as a flicker.
+    static let symbolOptions = SymbolEffectOptions.speed(0.7)
+
+    /// `animation`, or a short crossfade when Reduce Motion is on —
+    /// opacity changes are still allowed; movement and scale are not.
+    static func adaptive(_ animation: Animation, reduceMotion: Bool) -> Animation {
+        reduceMotion ? .easeInOut(duration: 0.15) : animation
+    }
+
+    /// Banner strips: slide down from under the toolbar and fade.
+    static func banner(reduceMotion: Bool) -> AnyTransition {
+        reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity)
+    }
+
+    /// Full-screen phase swaps (auth ▸ unlocking ▸ browser): fade with a
+    /// slight scale so the new screen settles into place.
+    static func phase(reduceMotion: Bool) -> AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98))
+    }
+
+    /// Inline messages (errors, hints) that appear under a field.
+    static func inline(reduceMotion: Bool) -> AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -4))
+    }
+
+    /// Counts that change in place ("Failed (3)", "Uploads: 4"): digits
+    /// roll toward the new value; a plain crossfade under Reduce Motion.
+    static func numeric(_ value: Double, reduceMotion: Bool) -> ContentTransition {
+        reduceMotion ? .opacity : .numericText(value: value)
+    }
+}
+
+extension Transaction {
+    /// Set by `Motion.rowChange`: the folder table drops every other
+    /// animation (banners, drop overlay, full reloads) and lets only these
+    /// small, deliberate row changes animate.
+    @Entry var animatesRows = false
+}
+
+extension Motion {
+    /// Runs a row insertion/removal in the folder table animated — only
+    /// for a small delta in a modest folder (an NSTableView batch update
+    /// over thousands of rows costs more than it shows) and never under
+    /// Reduce Motion (read from NSWorkspace: callers are models with no
+    /// SwiftUI environment).
+    @MainActor
+    static func rowChange(delta: Int, total: Int, _ body: () -> Void) {
+        guard delta <= 20, total < 2_000,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        else {
+            body()
+            return
+        }
+        var transaction = Transaction(animation: snappy)
+        transaction.animatesRows = true
+        withTransaction(transaction, body)
+    }
+}
+
+/// Horizontal shake — macOS's "that didn't work" for a rejected password
+/// or code (the login window does the same). Driven by a counter: bump it
+/// on each failure. Callers skip the bump under Reduce Motion.
+struct ShakeEffect: GeometryEffect {
+    var travel: CGFloat = 8
+    var shakes: CGFloat = 3
+    var animatableData: CGFloat
+
+    init(trigger: Int) {
+        animatableData = CGFloat(trigger)
+    }
+
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        // Fractional part of the animated counter → 0…1 within one bump;
+        // the sine dies out at both ends, so rest position is exact.
+        let progress = animatableData - animatableData.rounded(.down)
+        let offset = travel * sin(progress * .pi * 2 * shakes) * (1 - progress)
+        return ProjectionTransform(CGAffineTransform(translationX: offset, y: 0))
+    }
+}
+
+extension View {
+    /// Shakes the view each time `trigger` changes (see ShakeEffect).
+    func shake(trigger: Int) -> some View {
+        modifier(ShakeEffect(trigger: trigger))
+            .animation(.linear(duration: 0.4), value: trigger)
+    }
+}
+
+/// Keeps a progress state invisible for a beat, then fades it in, so a
+/// fast load (a cache miss that returns in ~100 ms, a quick session
+/// restore) never flashes a spinner.
+struct DelayedReveal: ViewModifier {
+    var delay: Duration = .milliseconds(250)
+    @State private var isVisible = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isVisible ? 1 : 0)
+            .task {
+                try? await Task.sleep(for: delay)
+                withAnimation(.easeIn(duration: 0.2)) { isVisible = true }
+            }
+    }
+}
+
+extension View {
+    /// See DelayedReveal.
+    func delayedReveal(after delay: Duration = .milliseconds(250)) -> some View {
+        modifier(DelayedReveal(delay: delay))
+    }
+}
+
+/// A titled spinner behind DelayedReveal.
+struct DelayedProgressView: View {
+    let title: LocalizedStringKey
+
+    var body: some View {
+        ProgressView(title)
+            .delayedReveal()
+    }
+}

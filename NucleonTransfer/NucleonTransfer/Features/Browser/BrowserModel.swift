@@ -10,6 +10,9 @@
 // F8.4-U3: Back/Forward — every path change feeds `forwardStack`, so a
 // pop (Go ▸ Back, breadcrumb, system gesture) can be re-pushed with
 // Forward until the user navigates somewhere new.
+// Root switching keeps one model per root alive (MainView's cache), so
+// coming back to a root shows its folder and rows at once; `reappear()`
+// then revalidates in the background.
 import Foundation
 
 /// Cached listing for one folder (F8.3-P3: one observable object per
@@ -131,6 +134,7 @@ final class BrowserModel {
         guard uploadsBlocked else { return false }
         #if DEBUG
         if previewUploadsBlocked != nil { return !previewBannerDismissed }
+        if session.uploads == nil { return !DebugOverrides.shared.uploadsBannerDismissed }
         #endif
         return !(session.uploads?.uploadsBlockedBannerDismissed ?? false)
     }
@@ -139,14 +143,25 @@ final class BrowserModel {
     func dismissUploadsBlockedBanner() {
         #if DEBUG
         if previewUploadsBlocked != nil { previewBannerDismissed = true; return }
+        if session.uploads == nil { DebugOverrides.shared.uploadsBannerDismissed = true; return }
         #endif
         session.uploads?.uploadsBlockedBannerDismissed = true
     }
 
+    /// Upload attempts refused while blocked — the banner's icon wiggles
+    /// on each one, so a drop onto an already-visible banner still
+    /// answers.
+    private(set) var uploadRefusedCount = 0
+    /// Counters the toolbar keys symbol effects on (polish pass 4): each
+    /// bumps once per completed action — never per row or per tick.
+    private(set) var toolbarPulses = ToolbarPulses()
+
     /// An upload attempt while blocked — the banner explains why.
     private func reshowUploadsBlockedBanner() {
+        uploadRefusedCount += 1
         #if DEBUG
         if previewUploadsBlocked != nil { previewBannerDismissed = false; return }
+        if session.uploads == nil { DebugOverrides.shared.uploadsBannerDismissed = false; return }
         #endif
         session.uploads?.uploadsBlockedBannerDismissed = false
     }
@@ -157,6 +172,10 @@ final class BrowserModel {
     let session: AppSession
     /// Orders overlapping listings and hides optimistic removals (F8.2-R7).
     @ObservationIgnored private var loadGate = FolderLoadGate()
+    /// Folders whose next applied listing animates its row changes — set
+    /// by `createFolder`, consumed by whichever `load` lands first (the
+    /// forced one or the remote-changed one, whichever `loadGate` keeps).
+    @ObservationIgnored private var animatesNextListing: Set<String> = []
     /// DEBUG preview seam: when true, `load` is a no-op so seeded folder
     /// states render offline (see `BrowserModel.preview` below).
     private var previewStubbed = false
@@ -239,7 +258,13 @@ final class BrowserModel {
                   let visible = loadGate.apply(items, token: token, folder: loc.linkID)
             else { return }
             // Same store object: a stale flag set meanwhile survives.
-            store.items = visible
+            if animatesNextListing.remove(loc.linkID) != nil {
+                Motion.rowChange(delta: abs(visible.count - store.items.count), total: visible.count) {
+                    store.items = visible
+                }
+            } else {
+                store.items = visible
+            }
             store.phase = .loaded
         } catch let error as ProtonAPIError where error == .unauthorized {
             // Only the session that produced this listing may be signed
@@ -364,6 +389,40 @@ final class BrowserModel {
         await load(current, force: true)
     }
 
+    /// Set once the container has shown this model — a later appearance
+    /// is a return to this root from another one (MainView's cache).
+    @ObservationIgnored private(set) var hasAppeared = false
+    /// The folder chain as last seen on screen. Tearing the stack down on
+    /// a root switch resets the bound `path` to [], so a return to this
+    /// root puts the chain back from here.
+    @ObservationIgnored private var parkedPath: [DriveLocation] = []
+
+    /// The container saw `path` change while on screen.
+    func pathChangedOnScreen() {
+        parkedPath = path
+    }
+
+    /// The container came on screen. On a return to this root: put back
+    /// the folder chain, pick up a sort changed in another root (the
+    /// preference is app-wide) and revalidate everything — the cache may
+    /// be minutes old and changes made elsewhere (the web app, another
+    /// device) are never published to `remoteChanged`. Cached rows stay up
+    /// while the reload runs.
+    func reappear(savedSortOrder: [KeyPathComparator<DriveItem>]) {
+        defer { hasAppeared = true }
+        guard hasAppeared else { return }
+        if path.isEmpty, !parkedPath.isEmpty { path = parkedPath }
+        if sortOrder != savedSortOrder { sortOrder = savedSortOrder }
+        markAllStale()
+    }
+
+    /// Every cached folder refetches on its next load; the current one
+    /// reloads now.
+    func markAllStale() {
+        for store in folders.values { store.isStale = true }
+        Task { await load(current) }
+    }
+
     /// Post-operation consistency (uploads/deletes in S2.3): flags every
     /// touched parent as stale, and refetches only if one of them is the
     /// folder on screen. Other stale folders lazily refresh on next visit.
@@ -395,6 +454,7 @@ final class BrowserModel {
     func downloadItems(_ ids: Set<DriveItem.ID>) {
         let items = selectedItems(ids)
         guard !items.isEmpty, let downloads = session.downloads else { return }
+        toolbarPulses.downloads += 1
         Task { await downloads.download(items) }
     }
 
@@ -427,6 +487,7 @@ final class BrowserModel {
         }
         guard canUpload, !urls.isEmpty, let uploads = session.uploads else { return }
         let breadcrumb = ancestors(of: destination).map(\.name).joined(separator: " › ")
+        toolbarPulses.uploads += 1
         await uploads.upload(urls: urls, to: destination, breadcrumb: breadcrumb)
     }
 
@@ -437,7 +498,8 @@ final class BrowserModel {
     }
 
     /// Creates a folder named `name` in the current folder, refetches it
-    /// and selects the new row. Throws raw — the sheet maps via
+    /// and selects the new row — which slides into the table (polish
+    /// pass 3, `Motion.rowChange`). Throws raw — the sheet maps via
     /// UserFacingError and stays open so the name can be fixed.
     /// (`folderOps.createFolder` already publishes remoteChanged; the
     /// extra forced load is a belt-and-braces refresh, `load` dedupes.)
@@ -450,6 +512,8 @@ final class BrowserModel {
             throw FolderOperationError.sessionNotReady
         }
         let linkID = try await ops.createFolder(name: name, in: current)
+        animatesNextListing.insert(current.linkID)
+        toolbarPulses.foldersCreated += 1
         await load(current, force: true)
         selection = [linkID]
     }
@@ -480,7 +544,8 @@ final class BrowserModel {
         pendingTrash = []
     }
 
-    /// Optimistic trash (S2.3/6.3): rows leave the cache immediately, then
+    /// Optimistic trash (S2.3/6.3): rows leave the cache immediately (and
+    /// the table, animated for a few rows — `Motion.rowChange`), then
     /// the batch endpoint runs; `remoteChanged` marks the parent stale →
     /// reload. A failure force-reloads (rows come back) and lands in
     /// `actionError` for the view's alert. F8.2-R7: the removal is
@@ -492,8 +557,12 @@ final class BrowserModel {
         let loc = current
         let removed = Set(items.map(\.id))
         let handle = loadGate.beginRemoval(removed, folder: loc.linkID)
-        state(for: loc).items.removeAll { removed.contains($0.id) }
+        let store = state(for: loc)
+        Motion.rowChange(delta: removed.count, total: store.items.count) {
+            store.items.removeAll { removed.contains($0.id) }
+        }
         selection.subtract(ids)
+        toolbarPulses.trashes += 1
         do {
             try await ops.trash(items, in: loc)
             loadGate.finishRemoval(handle, folder: loc.linkID, succeeded: true)
@@ -503,6 +572,14 @@ final class BrowserModel {
             actionError = UserFacingError.message(for: error)
         }
     }
+}
+
+/// See `BrowserModel.toolbarPulses`.
+struct ToolbarPulses: Equatable {
+    var uploads = 0
+    var downloads = 0
+    var foldersCreated = 0
+    var trashes = 0
 }
 
 #if DEBUG

@@ -18,6 +18,9 @@
 // Back/Forward sit in the navigation area; a failed refresh over cached
 // rows shows the "Couldn't refresh" banner; the subtitle counts the
 // selection.
+// Polish pass: banners slide in under the toolbar, the overlay states
+// crossfade, the spinner waits a beat before showing (no flash on fast
+// loads) and the subtitle stays blank until there is a count to show.
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -46,6 +49,13 @@ struct FolderView: View {
     /// View ▸ Show Path Bar (⌥⌘P) — drawn per folder view, so pushed
     /// folders show it too.
     @AppStorage(BrowserPreferences.showPathBarKey) private var showPathBar = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Toolbar symbol beats (polish pass 4): Trash shows `trash.fill`,
+    /// New Folder morphs to a filled folder, Download erases its arrow
+    /// (drawn back on when the flag drops).
+    @State private var trashJustFilled = false
+    @State private var folderJustCreated = false
+    @State private var downloadArrowErased = false
 
     /// This folder's store — observed per folder (F8.3-P3).
     private var state: FolderStore { model.state(for: location) }
@@ -63,8 +73,11 @@ struct FolderView: View {
             tableWithUploadDrop
             if showPathBar {
                 PathBar(model: model, location: location)
+                    .transition(.opacity)
             }
         }
+            .animation(Motion.adaptive(Motion.smooth, reduceMotion: reduceMotion), value: bannerState)
+            .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: showPathBar)
             // The topmost FolderView owns the toolbar, so the filter field
             // is declared here (a stack-level .searchable never showed).
             .searchable(
@@ -114,10 +127,23 @@ struct FolderView: View {
                     }
                     .help(uploadHelp)
                     .disabled(!model.canUpload)
+                    // Polish pass 4: each toolbar symbol answers its action
+                    // with its own gesture — Upload's arrow leans up,
+                    // Download's is redrawn, New Folder fills, Trash fills
+                    // and shakes. A refused upload wiggles sideways like
+                    // the blocked banner's icon.
+                    .symbolEffect(.wiggle.up, options: Motion.symbolOptions,
+                                  value: pulse(model.toolbarPulses.uploads))
+                    .symbolEffect(.wiggle, options: Motion.symbolOptions,
+                                  value: pulse(model.uploadRefusedCount))
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button("New Folder", systemImage: "folder.badge.plus") {
+                    Button {
                         model.showingNewFolder = true
+                    } label: {
+                        // The "+" melts into a filled folder for a beat.
+                        Label("New Folder", systemImage: folderJustCreated ? "folder.fill" : "folder.badge.plus")
+                            .contentTransition(symbolSwap)
                     }
                     .help("New Folder")
                     .disabled(!model.root.allowsWrites)
@@ -129,11 +155,18 @@ struct FolderView: View {
                     }
                     .help("Download")
                     .disabled(model.selection.isEmpty)
+                    .symbolEffect(.drawOff, options: Motion.symbolOptions, isActive: downloadArrowErased)
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Move to Trash", systemImage: "trash") {
+                    Button {
                         model.requestTrash(model.selection)
+                    } label: {
+                        // The can fills and shakes as the rows leave.
+                        Label("Move to Trash", systemImage: trashJustFilled ? "trash.fill" : "trash")
+                            .contentTransition(symbolSwap)
                     }
+                    .symbolEffect(.wiggle.counterClockwise, options: Motion.symbolOptions,
+                                  value: pulse(model.toolbarPulses.trashes))
                     .help("Move to Trash")
                     .disabled(model.selection.isEmpty || !model.root.allowsWrites)
                 }
@@ -148,6 +181,40 @@ struct FolderView: View {
             .task(id: location) {
                 await model.load(location)
             }
+            .task(id: model.toolbarPulses.trashes) {
+                guard model.toolbarPulses.trashes > 0 else { return }
+                await beat($trashJustFilled)
+            }
+            .task(id: model.toolbarPulses.foldersCreated) {
+                guard model.toolbarPulses.foldersCreated > 0 else { return }
+                await beat($folderJustCreated)
+            }
+            .task(id: model.toolbarPulses.downloads) {
+                // Movement-only (the arrow is erased and redrawn).
+                guard model.toolbarPulses.downloads > 0, !reduceMotion else { return }
+                await beat($downloadArrowErased, for: .milliseconds(600))
+            }
+    }
+
+    /// Symbol swaps: magic replace (shared parts morph), a crossfade under
+    /// Reduce Motion.
+    private var symbolSwap: ContentTransition {
+        reduceMotion ? .opacity : .symbolEffect(.replace.magic(fallback: .replace), options: Motion.symbolOptions)
+    }
+
+    /// Raises `flag` for `duration`, then drops it — a toolbar symbol
+    /// beat. A newer beat cancels this one (the task restarts), so the
+    /// flag drops early and rises again.
+    private func beat(_ flag: Binding<Bool>, for duration: Duration = Motion.symbolBeat) async {
+        flag.wrappedValue = true
+        try? await Task.sleep(for: duration)
+        flag.wrappedValue = false
+    }
+
+    /// A symbol-effect trigger: the counter, or a constant under Reduce
+    /// Motion (bounce and wiggle are movement).
+    private func pulse(_ counter: Int) -> Int {
+        reduceMotion ? 0 : counter
     }
 
     /// Read-only (Photos), uploads-blocked and refresh-failed banners.
@@ -157,13 +224,25 @@ struct FolderView: View {
             PhotosReadOnlyBanner()
         }
         if model.showsUploadsBlockedBanner {
-            UploadsBlockedBanner { model.dismissUploadsBlockedBanner() }
+            UploadsBlockedBanner(refusals: model.uploadRefusedCount) {
+                model.dismissUploadsBlockedBanner()
+            }
+                .transition(Motion.banner(reduceMotion: reduceMotion))
         }
         if case .failed(let message) = state.phase, !state.items.isEmpty {
             RefreshFailedBanner(message: message) {
                 Task { await model.load(location, force: true) }
             }
+            .transition(Motion.banner(reduceMotion: reduceMotion))
         }
+    }
+
+    /// What the animated banners depend on — one value, so the stack
+    /// animates only when a banner comes or goes.
+    private var bannerState: [Bool] {
+        var refreshFailed = false
+        if case .failed = state.phase, !state.items.isEmpty { refreshFailed = true }
+        return [model.showsUploadsBlockedBanner, refreshFailed]
     }
 
     /// The listing with the S3.1 drop-to-upload wiring. On read-only
@@ -181,11 +260,27 @@ struct FolderView: View {
             items: items, location: location, model: model, hover: hover,
             columnCustomization: $columnCustomization
         )
-            .overlay { stateOverlay }
+            // Banner/path-bar animations wrap this stack; a refresh that
+            // swaps the rows in the same update (Try Again on the
+            // "Couldn't refresh" banner) must not animate a 5k-row diff.
+            // Only deliberate row changes (Motion.rowChange) get through.
+            .transaction { if !$0.animatesRows { $0.animation = nil } }
             .overlay {
-                if isTargeted {
-                    HoveredDropOverlay(hover: hover, fallback: location)
+                stateOverlay
+                    .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: overlayState)
+            }
+            .overlay {
+                // The animation sits inside the overlay so it never reaches
+                // the table's rows (see FolderTable's transaction below).
+                ZStack {
+                    if isTargeted {
+                        HoveredDropOverlay(hover: hover, fallback: location)
+                            .transition(
+                                reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 1.02))
+                            )
+                    }
                 }
+                .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: isTargeted)
             }
         if model.root.allowsWrites {
             // F8.4-U1: drops stay accepted while uploads are blocked — a
@@ -210,8 +305,9 @@ struct FolderView: View {
     private var stateOverlay: some View {
         switch state.phase {
         case .loading where state.items.isEmpty:
-            ProgressView("Loading…")
+            DelayedProgressView(title: "Loading…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity)
         case .failed(let message) where state.items.isEmpty:
             ContentUnavailableView {
                 Label("Couldn't Load Folder", systemImage: "exclamationmark.triangle")
@@ -222,6 +318,7 @@ struct FolderView: View {
                     Task { await model.load(location, force: true) }
                 }
             }
+            .transition(overlayTransition)
         case .loaded where state.items.isEmpty:
             // B3: the copy follows the root. Photos is read-only, so it
             // must not invite uploads; a non-writable non-Photos root
@@ -234,25 +331,49 @@ struct FolderView: View {
                     systemImage: "photo.on.rectangle",
                     description: Text("Photos you add in Proton Drive appear here.")
                 )
+                .transition(overlayTransition)
             } else if model.root.allowsWrites {
                 ContentUnavailableView(
                     "This Folder Is Empty",
                     systemImage: "folder",
                     description: Text("Drop files here or use Upload.")
                 )
+                .transition(overlayTransition)
             } else {
                 ContentUnavailableView("This Folder Is Empty", systemImage: "folder")
+                    .transition(overlayTransition)
             }
         case _ where items.isEmpty && isFiltering:
             ContentUnavailableView.search(text: model.filterText)
+                .transition(.opacity)
         default:
             EmptyView()
         }
     }
 
+    /// Which overlay state is up — drives its crossfade. The search text
+    /// is left out so typing doesn't re-animate the "No Results" view.
+    private var overlayState: Int {
+        switch state.phase {
+        case .loading where state.items.isEmpty: 1
+        case .failed where state.items.isEmpty: 2
+        case .loaded where state.items.isEmpty: 3
+        case _ where items.isEmpty && isFiltering: 4
+        default: 0
+        }
+    }
+
+    /// Empty/error states rise slightly into place.
+    private var overlayTransition: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.96))
+    }
+
     /// "2 of 14 selected" / "14 items" (F8.4-U3). Counts selected rows
-    /// among the visible ones, so a filter never yields "3 of 2".
+    /// among the visible ones, so a filter never yields "3 of 2". Blank
+    /// while the first load runs or failed — "0 items" over a spinner or
+    /// an error read as an empty folder (live audit).
     private var subtitle: String {
+        if state.items.isEmpty, state.phase != .loaded { return "" }
         let selection = model.selection
         let selected = selection.isEmpty ? 0 : items.lazy.filter { selection.contains($0.id) }.count
         return DriveFormatting.subtitle(selected: selected, total: items.count)
@@ -278,6 +399,11 @@ private struct HoveredDropOverlay: View {
     let fallback: DriveLocation
 
     var body: some View {
-        DropOverlay(location: DropTargeting.destination(for: hover.item, fallback: fallback))
+        let destination = DropTargeting.destination(for: hover.item, fallback: fallback)
+        DropOverlay(location: destination)
+            // Trackpad "snap" as the drop target moves onto a folder row
+            // (or back to this folder) — the HIG's alignment case, and the
+            // app's only haptic. Follows the system haptics setting.
+            .sensoryFeedback(.alignment, trigger: destination)
     }
 }

@@ -8,6 +8,11 @@
 // Details…" (alert with Copy); failure/cancellation carry an SF Symbol
 // beside the subtitle (never color alone); VoiceOver reads each row as ONE
 // element (name + status) whose buttons are exposed as named actions.
+// Polish pass: the progress bar glides between snapshots and Pause/Resume
+// is one button whose symbol morphs (replace effect) instead of swapping
+// controls. Pass 3: done rows carry a checkmark, drawn on (drawOn) when
+// the transfer has just finished — older rows show it as is, so opening
+// the popover doesn't redraw every finished row.
 import AppKit
 import SwiftUI
 
@@ -28,6 +33,11 @@ struct TransferRow: View {
     let item: TransferDisplayItem
     var actions = TransferRowActions()
     @State private var showDetails = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Set on appear for a just-finished row — inserts the checkmark so
+    /// its drawOn transition plays. (Finishing moves the row to another
+    /// section, so it is a NEW view: a value-driven effect can't fire.)
+    @State private var checkDrawn = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -43,9 +53,8 @@ struct TransferRow: View {
                     .truncationMode(.middle)
                     .help(item.name)
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    if let symbol = item.statusSymbol {
-                        Image(systemName: symbol)
-                            .imageScale(.small)
+                    if let symbol = item.statusSymbol, !awaitsCheckDraw {
+                        statusGlyph(symbol)
                     }
                     Text(item.subtitle)
                         .lineLimit(2)
@@ -58,14 +67,25 @@ struct TransferRow: View {
                 if let progress = item.progress {
                     ProgressView(value: progress)
                         .controlSize(.small)
+                        // Snapshots land in steps; ease between them.
+                        .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: progress)
                         .accessibilityLabel("\(item.name) progress")
                         .accessibilityValue(item.progressText ?? "")
+                        .transition(.opacity)
                 }
             }
+            .animation(reduceMotion ? nil : Motion.snappy, value: item.statusSymbol)
+            .animation(reduceMotion ? nil : Motion.snappy, value: item.progress == nil)
             Spacer(minLength: 4)
             actionButtons
         }
         .padding(.vertical, 2)
+        .onAppear {
+            guard awaitsCheckDraw else { return }
+            withAnimation(Motion.adaptive(.smooth(duration: 0.5), reduceMotion: reduceMotion)) {
+                checkDrawn = true
+            }
+        }
         .contextMenu { contextActions }
         // One VoiceOver stop per row: name + status/progress, buttons as
         // named actions (rotor "Actions") instead of separate stops.
@@ -78,6 +98,26 @@ struct TransferRow: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(item.subtitle)
+        }
+    }
+
+    /// A row that finished in the last couple of seconds and hasn't drawn
+    /// its checkmark yet.
+    private var awaitsCheckDraw: Bool {
+        item.isDone && !checkDrawn && Date().timeIntervalSince(item.updatedAt) < 2
+    }
+
+    /// The end-state glyph with its insertion transition: drawn on for a
+    /// checkmark, the symbol "appear" otherwise, a fade under Reduce Motion.
+    @ViewBuilder
+    private func statusGlyph(_ symbol: String) -> some View {
+        let image = Image(systemName: symbol).imageScale(.small)
+        if reduceMotion {
+            image.transition(.opacity)
+        } else if item.isDone {
+            image.transition(.symbolEffect(.drawOn))
+        } else {
+            image.transition(.symbolEffect(.appear))
         }
     }
 
@@ -110,11 +150,16 @@ struct TransferRow: View {
     @ViewBuilder
     private var actionButtons: some View {
         // Spec-6.2 glyphs; order matches the wireframe (⏸ ✕ · ↻ ✕ · 🔍).
-        if let pause = actions.pause {
-            rowButton("Pause", systemImage: "pause.circle", action: pause)
-        }
-        if let resume = actions.resume {
-            rowButton("Resume", systemImage: "play.circle", action: resume)
+        // Pause ⇄ Resume is ONE button (stable identity) so the glyph
+        // morphs instead of one control replacing another.
+        if let toggle = actions.resume ?? actions.pause {
+            let paused = actions.resume != nil
+            rowButton(
+                paused ? "Resume" : "Pause",
+                systemImage: paused ? "play.circle" : "pause.circle",
+                action: toggle
+            )
+            .contentTransition(.symbolEffect(.replace))
         }
         if let retry = actions.retry {
             rowButton("Retry", systemImage: "arrow.clockwise.circle", action: retry)
@@ -136,7 +181,9 @@ struct TransferRow: View {
     ) -> some View {
         Button(label, systemImage: systemImage, action: action)
             .labelStyle(.iconOnly)
-            .buttonStyle(.borderless)
+            // Flat at rest, a soft wash on hover (HoverButtonStyle), so the
+            // small glyphs read as clickable.
+            .buttonStyle(.hover)
             .help(label)
     }
 }

@@ -9,10 +9,14 @@
 // B1). The .environment calls below stay as a safety net for any other
 // child, and are also repeated on the stack root + inside the
 // navigationDestination closure itself.
-// MainView gives each root its own instance with .id(root.id).
+// MainView gives each root its own view identity with .id(root.id) and
+// hands back the same cached BrowserModel when a root is revisited.
 // F8.4-U3: the New Folder sheet, trash confirmationDialog and action
-// alert are presented ONCE here (bound to `model.current`) instead of by
-// every FolderView in the stack; the filter field's focus is published
+// alert are presented by ONE FolderView at a time — the topmost
+// (`BrowserPresentations`, bound only where location == model.current).
+// Attached outside the NavigationStack they never showed while a folder
+// was pushed (the sheet appeared only after Back — live audit); the
+// filter field's focus is published
 // to the menu bar (⌘⌫ must stay delete-to-line-start while typing); the
 // optional path bar lives in each FolderView (a stack-level inset was
 // covered by every pushed folder — it showed on the root only).
@@ -41,11 +45,9 @@ struct BrowserContainerView: View {
     @AppStorage(AppSettings.suppressTrashConfirmationKey)
     private var suppressTrashConfirmation = AppSettings.defaultSuppressTrashConfirmation
 
-    init(root: DriveRoot, session: AppSession) {
-        _model = State(initialValue: BrowserModel(
-            root: root, session: session,
-            sortOrder: BrowserPreferences.savedSortOrder()
-        ))
+    /// A model kept alive across root switches (MainView's cache).
+    init(model: BrowserModel) {
+        _model = State(initialValue: model)
     }
 
     var body: some View {
@@ -53,6 +55,10 @@ struct BrowserContainerView: View {
         NavigationStack(path: $model.path) {
             FolderView(location: model.rootLocation, model: model, columnCustomization: $columnCustomization,
                        isSearchFocused: $isSearchFocused)
+                .modifier(BrowserPresentations(
+                    model: model, isActive: model.current == model.rootLocation,
+                    suppressTrashConfirmation: $suppressTrashConfirmation
+                ))
                 // Safety net on the stack root (R2/B1): any future child
                 // that still reads the environment sees the objects.
                 .environment(model)
@@ -60,58 +66,15 @@ struct BrowserContainerView: View {
                 .navigationDestination(for: DriveLocation.self) { location in
                     FolderView(location: location, model: model, columnCustomization: $columnCustomization,
                            isSearchFocused: $isSearchFocused)
+                        .modifier(BrowserPresentations(
+                            model: model, isActive: model.current == location,
+                            suppressTrashConfirmation: $suppressTrashConfirmation
+                        ))
                         // Same net inside the destination closure — this
                         // content is hosted off-hierarchy by the stack.
                         .environment(model)
                         .environment(model.session)
                 }
-        }
-        .sheet(isPresented: $model.showingNewFolder) {
-            NewFolderSheet(
-                // R5: live duplicate check against the decrypted sibling
-                // names of the folder on screen — undecrypted items stay
-                // out and the server remains the safety net.
-                existingNames: Set(
-                    model.state(for: model.current).items
-                        .filter(\.isNameDecrypted).map(\.name)
-                )
-            ) { name in
-                try await model.createFolder(named: name)
-            }
-        }
-        // F8.2-R8: counts and trashes `pendingTrash` (the clicked rows or
-        // the selection, whichever opened the dialog) — never the live
-        // selection, which a context-menu click doesn't move.
-        .confirmationDialog(
-            "Move ^[\(model.pendingTrash.count) item](inflect: true) to Trash?",
-            isPresented: $model.confirmingTrash,
-            titleVisibility: .visible
-        ) {
-            Button("Move to Trash", role: .destructive) {
-                model.confirmTrash()
-            }
-            Button("Cancel", role: .cancel) {
-                model.cancelTrash()
-            }
-        } message: {
-            if model.pendingTrash.count == 1 {
-                Text("You can restore it from Trash in Proton Drive on the web.")
-            } else {
-                Text("You can restore them from Trash in Proton Drive on the web.")
-            }
-        }
-        .dialogSuppressionToggle(isSuppressed: $suppressTrashConfirmation)
-        .alert(
-            "Couldn’t Move to Trash",
-            isPresented: Binding(
-                get: { model.actionError != nil },
-                set: { if !$0 { model.actionError = nil } }
-            ),
-            presenting: model.actionError
-        ) { _ in
-            Button("OK", role: .cancel) {}
-        } message: { message in
-            Text(message)
         }
         // S4.2: publish this browser to the menu bar (AppCommands), plus
         // the filter focus so Move to Trash yields ⌘⌫ to the text field.
@@ -133,7 +96,11 @@ struct BrowserContainerView: View {
                 lastFolder = FolderPathRestoration.encode(shareID: model.root.shareID, path: model.path)
             }
         }
+        .onAppear {
+            model.reappear(savedSortOrder: BrowserPreferences.savedSortOrder())
+        }
         .onChange(of: model.path) { _, path in
+            model.pathChangedOnScreen()
             lastFolder = FolderPathRestoration.encode(shareID: model.root.shareID, path: path)
         }
         .onChange(of: model.sortOrder) { _, order in
@@ -146,6 +113,72 @@ struct BrowserContainerView: View {
         // must see the SAME instance the model uses — including previews,
         // where no AppSession was injected higher up.
         .environment(model.session)
+    }
+}
+
+
+/// The browser's modal presentations (F8.4-U3), attached to every
+/// FolderView in the stack but live only on the topmost (`isActive`), so
+/// exactly one presents and it does so from the visible folder.
+private struct BrowserPresentations: ViewModifier {
+    @Bindable var model: BrowserModel
+    let isActive: Bool
+    @Binding var suppressTrashConfirmation: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: active($model.showingNewFolder)) {
+                NewFolderSheet(
+                    // R5: live duplicate check against the decrypted sibling
+                    // names of the folder on screen — undecrypted items stay
+                    // out and the server remains the safety net.
+                    existingNames: Set(
+                        model.state(for: model.current).items
+                            .filter(\.isNameDecrypted).map(\.name)
+                    )
+                ) { name in
+                    try await model.createFolder(named: name)
+                }
+            }
+            // F8.2-R8: counts and trashes `pendingTrash` (the clicked rows or
+            // the selection, whichever opened the dialog) — never the live
+            // selection, which a context-menu click doesn't move.
+            .confirmationDialog(
+                "Move ^[\(model.pendingTrash.count) item](inflect: true) to Trash?",
+                isPresented: active($model.confirmingTrash),
+                titleVisibility: .visible
+            ) {
+                Button("Move to Trash", role: .destructive) {
+                    model.confirmTrash()
+                }
+                Button("Cancel", role: .cancel) {
+                    model.cancelTrash()
+                }
+            } message: {
+                if model.pendingTrash.count == 1 {
+                    Text("You can restore it from Trash in Proton Drive on the web.")
+                } else {
+                    Text("You can restore them from Trash in Proton Drive on the web.")
+                }
+            }
+            .dialogSuppressionToggle(isSuppressed: $suppressTrashConfirmation)
+            .alert(
+                "Couldn’t Move to Trash",
+                isPresented: Binding(
+                    get: { isActive && model.actionError != nil },
+                    set: { if !$0 { model.actionError = nil } }
+                ),
+                presenting: model.actionError
+            ) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { message in
+                Text(message)
+            }
+    }
+
+    /// `flag` on the topmost folder; a constant `false` everywhere else.
+    private func active(_ flag: Binding<Bool>) -> Binding<Bool> {
+        isActive ? flag : .constant(false)
     }
 }
 

@@ -42,7 +42,10 @@ struct PhotosReadOnlyBanner: View {
 /// F8.4-U1: shown once per run after Proton refused an upload with code
 /// 2000. Closing it keeps the upload controls disabled.
 struct UploadsBlockedBanner: View {
+    /// Bumped on every refused upload — wiggles the warning icon.
+    var refusals = 0
     var onDismiss: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         BannerStrip {
@@ -56,16 +59,27 @@ struct UploadsBlockedBanner: View {
             } icon: {
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundStyle(.yellow)
+                    // "That didn't work" for a drop onto a visible banner;
+                    // a pulse (no movement) under Reduce Motion.
+                    .symbolEffect(.wiggle, value: reduceMotion ? 0 : refusals)
+                    .symbolEffect(.pulse, value: reduceMotion ? refusals : 0)
             }
             .layoutPriority(1)
             Spacer(minLength: 8)
             if let url = UploadsBlockedCopy.learnMoreURL {
                 Link("Learn More", destination: url)
             }
-            Button("Dismiss", systemImage: "xmark", action: onDismiss)
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .help("Dismiss")
+            Button(action: onDismiss) {
+                // The bare glyph was an 8-pt hit target (live audit) —
+                // the padded label is what a borderless button hit-tests.
+                Image(systemName: "xmark")
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            // Hover highlight (HoverButtonStyle).
+            .buttonStyle(.hover)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss")
         }
         .accessibilityElement(children: .contain)
     }
