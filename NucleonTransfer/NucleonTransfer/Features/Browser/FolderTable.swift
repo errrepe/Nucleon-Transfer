@@ -95,7 +95,7 @@ struct FolderTable: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(Self.nameAccessibilityLabel(for: item))
             }
-            .width(min: 160, ideal: 280)
+            .width(min: 160, ideal: 220)
             .customizationID("name")
             .disabledCustomizationBehavior(.visibility)
             TableColumn("Kind", value: \.kindDescription, comparator: .localizedStandard) { item in
@@ -111,6 +111,7 @@ struct FolderTable: View {
                     .monospacedDigit()
                     .lineLimit(1)
             }
+            .width(min: 120, ideal: 175)
             .customizationID("modified")
             TableColumn("Size", value: \.size) { item in
                 Text(DriveFormatting.size(item))

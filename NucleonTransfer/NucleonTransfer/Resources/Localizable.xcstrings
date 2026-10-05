@@ -872,6 +872,7 @@
     },
     "Demo Mode" : {
       "comment" : "Debug-only badge: offline demo session",
+      "extractionState" : "stale",
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
@@ -1660,6 +1661,7 @@
     },
     "Offline sample data — nothing is sent or stored." : {
       "comment" : "Debug-only demo badge tooltip",
+      "extractionState" : "stale",
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
