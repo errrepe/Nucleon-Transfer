@@ -17,6 +17,8 @@ enum UserFacingError: Sendable {
             switch f {
             case .needsHumanVerification:
                 return humanVerification
+            case .cancelled:
+                return "Upload stopped."
             case let .transient(msg):
                 return message(forMessage: msg)
             case let .permanent(msg):

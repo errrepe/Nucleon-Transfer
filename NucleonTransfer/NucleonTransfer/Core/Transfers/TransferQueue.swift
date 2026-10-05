@@ -94,6 +94,11 @@ enum TransferFailure: Error, Sendable, Equatable {
     case permanent(String)
     /// Proton HV 9001 — pause the whole queue, resume manually.
     case needsHumanVerification
+    /// The upload was cancelled (Task cancellation, `URLError.cancelled`,
+    /// possibly wrapped in `ProtonAPIError.transport`). Never a failure:
+    /// whoever cancelled (pause / cancel / remove / sign-out) already set
+    /// the job's state (F8.2-R1).
+    case cancelled
 }
 
 enum TransferErrorClassify {
@@ -101,6 +106,7 @@ enum TransferErrorClassify {
     /// retry loops must be opt-in (transient), never the default.
     static func classify(_ error: Error) -> TransferFailure {
         if let f = error as? TransferFailure { return f }
+        if isCancellation(error) { return .cancelled }
         if let api = error as? ProtonAPIError {
             switch api {
             case .humanVerificationRequired:
@@ -133,6 +139,21 @@ enum TransferErrorClassify {
             }
         }
         return .permanent(error.localizedDescription)
+    }
+
+    /// True for every shape a cancelled upload surfaces as: Swift
+    /// `CancellationError`, `URLError(.cancelled)` / NSURLErrorCancelled,
+    /// and either of those wrapped in `ProtonAPIError.transport`
+    /// (APIClient.data(for:) wraps every URLSession error).
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let f = error as? TransferFailure { return f == .cancelled }
+        if let api = error as? ProtonAPIError {
+            if case let .transport(underlying) = api { return isCancellation(underlying) }
+            return false
+        }
+        let ns = error as NSError
+        return ns.domain == (NSURLErrorDomain as String) && ns.code == NSURLErrorCancelled
     }
 }
 
@@ -194,8 +215,15 @@ actor TransferQueue {
     private var jobs: [UUID: TransferJob] = [:]
     /// Insertion order (stable UI listing + FIFO scheduling).
     private var order: [UUID] = []
-    private var inFlight: Set<UUID> = []
+    /// Live runs: job ID → generation token of the ONE run that owns the
+    /// slot. A run keeps its slot until its task actually returns — even
+    /// after pause/cancel/remove cancelled it (the uploader may take a
+    /// while to notice) — so concurrency never exceeds the limit and an id
+    /// is never re-pumped while its previous run is still unwinding
+    /// (F8.2-R1). `inFlight.count` is the number of occupied slots.
+    private var inFlight: [UUID: UInt64] = [:]
     private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var nextGeneration: UInt64 = 0
     private var uploader: (any TransferUploader)?
     private let storeURL: URL?
     /// UI hook: receives full snapshots (UI throttles/observes as it likes).
@@ -444,10 +472,12 @@ actor TransferQueue {
         }
     }
 
+    /// Drops the job. A running upload is cancelled but keeps its slot
+    /// (`inFlight`) until its task really returns — releasing it here let
+    /// the pump start another upload while this one was still unwinding,
+    /// exceeding the concurrency limit (F8.2-R1).
     func remove(id: UUID) {
         tasks[id]?.cancel()
-        tasks[id] = nil
-        inFlight.remove(id)
         jobs[id] = nil
         order.removeAll { $0 == id }
         save(force: true)
@@ -468,26 +498,41 @@ actor TransferQueue {
     private func pump() {
         guard let uploader else { return }
         while inFlight.count < maxConcurrentUploads {
-            guard let next = order.compactMap({ jobs[$0] }).first(where: { $0.state == .queued }) else { break }
-            jobs[next.id]?.state = .uploading
-            jobs[next.id]?.updatedAt = Date()
-            inFlight.insert(next.id)
+            // An id whose previous run is still unwinding (paused then
+            // resumed fast) is skipped: that run's exit pumps again.
+            guard let next = order.compactMap({ jobs[$0] })
+                .first(where: { $0.state == .queued && inFlight[$0.id] == nil })
+            else { break }
             let id = next.id
-            tasks[id] = Task { await self.run(id: id, uploader: uploader) }
+            jobs[id]?.state = .uploading
+            jobs[id]?.updatedAt = Date()
+            nextGeneration &+= 1
+            let generation = nextGeneration
+            inFlight[id] = generation
+            tasks[id] = Task { await self.run(id: id, generation: generation, uploader: uploader) }
         }
         save(force: true)
         notify(force: true)
     }
 
-    private func run(id: UUID, uploader: any TransferUploader) async {
+    /// True while `generation` is still the run that owns `id`'s slot.
+    /// Every write a run makes is gated on this (plus a state check), so a
+    /// stale run can never touch a newer run's job, task or slot.
+    private func owns(_ id: UUID, _ generation: UInt64) -> Bool {
+        inFlight[id] == generation
+    }
+
+    private func run(id: UUID, generation: UInt64, uploader: any TransferUploader) async {
         defer {
-            tasks[id] = nil
-            inFlight.remove(id)
+            if owns(id, generation) {
+                inFlight[id] = nil
+                tasks[id] = nil
+            }
             save(force: true)
             notify(force: true)
             pump()
         }
-        guard let first = jobs[id], first.state == .uploading else { return }
+        guard owns(id, generation), let first = jobs[id], first.state == .uploading else { return }
         var job = first
         // Attempt loop: transient failures back off in-slot; pause/cancel win.
         while true {
@@ -496,7 +541,11 @@ actor TransferQueue {
                     job: job,
                     progress: { [self] done in await self.reportProgress(id: id, bytes: done) }
                 )
-                guard var done = jobs[id], done.state == .uploading else { return }
+                // The server committed the file. Record it even if the job
+                // was paused (or paused+resumed) meanwhile: discarding the
+                // success would make the next run upload it a second time.
+                // A removed job stays removed.
+                guard owns(id, generation), var done = jobs[id] else { return }
                 done.state = .done
                 done.bytesDone = done.bytesTotal
                 done.remoteLinkID = linkID
@@ -504,10 +553,19 @@ actor TransferQueue {
                 done.updatedAt = Date()
                 jobs[id] = done
                 return
-            } catch is CancellationError {
-                return // canceller already set paused/cancelled
             } catch {
-                switch TransferErrorClassify.classify(error) {
+                // Whoever stopped this job (pause / cancel / remove /
+                // sign-out) already set its state: a late error from the
+                // aborted upload must never overwrite it with `.failed`.
+                guard owns(id, generation), jobs[id]?.state == .uploading else { return }
+                let failure = TransferErrorClassify.classify(error)
+                switch failure {
+                case .cancelled:
+                    // Cancelled without an operator transition (e.g. the
+                    // system tore the request down): park it, never fail it.
+                    jobs[id]?.state = .paused
+                    jobs[id]?.updatedAt = Date()
+                    return
                 case .needsHumanVerification:
                     pauseAll() // HV 9001: whole queue pauses (TRANSFERS.md §3)
                     return
@@ -518,7 +576,6 @@ actor TransferQueue {
                     failed.errorMessage = message
                     failed.updatedAt = Date()
                     jobs[id] = failed
-                    job = failed
                     return
                 case let .transient(message):
                     guard var retrying = jobs[id] else { return }
@@ -537,8 +594,10 @@ actor TransferQueue {
                         failures: job.attempt,
                         jitter: TransferRetryPolicy.randomJitter()
                     ))
-                    // Pause/cancel during backoff wins over the retry.
-                    guard jobs[id]?.state == .uploading else { return }
+                    // Pause/cancel/remove during backoff wins over the retry.
+                    guard owns(id, generation), jobs[id]?.state == .uploading,
+                          !Task.isCancelled
+                    else { return }
                 }
             }
         }
