@@ -114,6 +114,20 @@ extension BrowserContainerView {
         .preferredColorScheme(.dark)
 }
 
+// F8.4-U1: Proton refused an upload with code 2000 — banner + Upload
+// controls disabled.
+#Preview("Uploads Blocked — Light") {
+    BrowserContainerView(preview: .preview(uploadsBlocked: true))
+        .frame(width: 720, height: 480)
+        .preferredColorScheme(.light)
+}
+
+#Preview("Uploads Blocked — Dark") {
+    BrowserContainerView(preview: .preview(uploadsBlocked: true))
+        .frame(width: 720, height: 480)
+        .preferredColorScheme(.dark)
+}
+
 #Preview("Photos — Read-Only") {
     BrowserContainerView(preview: .preview(root: PreviewFixtures.photosRoot))
         .frame(width: 720, height: 480)

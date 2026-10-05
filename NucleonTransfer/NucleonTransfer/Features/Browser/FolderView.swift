@@ -9,6 +9,8 @@
 // F7.1 R5 feeds the New Folder sheet the decrypted sibling names for its
 // live duplicate check. Loading kicks off in .task(id:) so revisits are
 // cheap (cache hit in BrowserModel.load).
+// F8.4-U1: after a Proton 2000 upload refusal, one dismissible banner
+// joins the top inset and the Upload menu + drop target disable.
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -37,14 +39,13 @@ struct FolderView: View {
     var body: some View {
         tableWithUploadDrop
             .safeAreaInset(edge: .top, spacing: 0) {
-                if model.root.kind == .photos {
-                    Label("Photos is read-only in Nucleon Transfer.", systemImage: "info.circle")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                        .background(.regularMaterial)
+                VStack(spacing: 0) {
+                    if model.root.kind == .photos {
+                        PhotosReadOnlyBanner()
+                    }
+                    if model.showsUploadsBlockedBanner {
+                        UploadsBlockedBanner { model.dismissUploadsBlockedBanner() }
+                    }
                 }
             }
             .navigationTitle(location.name)
@@ -69,10 +70,8 @@ struct FolderView: View {
                             Task { await model.uploadPanel(folders: true) }
                         }
                     }
-                    .help(model.root.allowsWrites
-                          ? "Upload files or a folder into this folder."
-                          : "Uploading to Photos isn't supported yet.")
-                    .disabled(!model.root.allowsWrites)
+                    .help(uploadHelp)
+                    .disabled(!model.canUpload)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("New Folder", systemImage: "folder.badge.plus") {
@@ -176,7 +175,10 @@ struct FolderView: View {
                 }
             }
         if model.root.allowsWrites {
-            table.onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+            // F8.4-U1: while uploads are blocked the drop accepts no
+            // types (no highlight, refused) — same view structure, so the
+            // table keeps its selection and scroll position.
+            table.onDrop(of: model.uploadsBlocked ? [] : [.fileURL], isTargeted: $isTargeted) { providers in
                 Task {
                     let urls = await UploadCoordinator.droppedFileURLs(providers)
                     await model.upload(urls: urls, to: location)
@@ -233,6 +235,13 @@ struct FolderView: View {
         default:
             EmptyView()
         }
+    }
+
+    /// Tooltip for the Upload menu: why it's disabled, when it is.
+    private var uploadHelp: Text {
+        if !model.root.allowsWrites { return Text("Uploading to Photos isn't supported yet.") }
+        if model.uploadsBlocked { return Text(UploadsBlockedCopy.message) }
+        return Text("Upload files or a folder into this folder.")
     }
 
     private var isFiltering: Bool {

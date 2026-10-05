@@ -92,6 +92,38 @@ final class BrowserModel {
     /// through @Observable property access).
     var remoteChangedToken: Int { session.activity.remoteChangedToken }
 
+    // MARK: - F8.4-U1 uploads blocked
+
+    /// Proton refused an upload from this app with code 2000 during this
+    /// run — every upload entry point disables itself (UploadCoordinator
+    /// owns the flag; it resets on sign-out and relaunch).
+    var uploadsBlocked: Bool {
+        #if DEBUG
+        if let previewUploadsBlocked { return previewUploadsBlocked }
+        #endif
+        return session.uploads?.uploadsBlocked ?? false
+    }
+
+    /// Upload controls are live: writable root and uploads not blocked.
+    var canUpload: Bool { root.allowsWrites && !uploadsBlocked }
+
+    /// The uploads-blocked banner is on screen (blocked, not dismissed).
+    var showsUploadsBlockedBanner: Bool {
+        guard uploadsBlocked else { return false }
+        #if DEBUG
+        if previewUploadsBlocked != nil { return !previewBannerDismissed }
+        #endif
+        return !(session.uploads?.uploadsBlockedBannerDismissed ?? false)
+    }
+
+    /// The banner's close button — the controls stay disabled.
+    func dismissUploadsBlockedBanner() {
+        #if DEBUG
+        if previewUploadsBlocked != nil { previewBannerDismissed = true; return }
+        #endif
+        session.uploads?.uploadsBlockedBannerDismissed = true
+    }
+
     /// The session this browser belongs to — also re-injected into the
     /// environment by BrowserContainerView so children (e.g. the S3.2
     /// transfers button) see the same instance, previews included.
@@ -101,6 +133,11 @@ final class BrowserModel {
     /// DEBUG preview seam: when true, `load` is a no-op so seeded folder
     /// states render offline (see `BrowserModel.preview` below).
     private var previewStubbed = false
+    #if DEBUG
+    /// Preview seam for the U1 banner (previews have no UploadCoordinator).
+    var previewUploadsBlocked: Bool?
+    private var previewBannerDismissed = false
+    #endif
 
     init(root: DriveRoot, session: AppSession) {
         self.root = root
@@ -268,12 +305,13 @@ final class BrowserModel {
     /// into the current folder via the session's UploadCoordinator.
     /// No-ops on read-only roots (Photos) or when uploads aren't wired.
     func uploadPanel(folders: Bool) async {
-        guard root.allowsWrites, session.uploads != nil else { return }
+        guard canUpload, session.uploads != nil else { return }
         let urls = await Panels.chooseUploadItems(folders: folders)
         await upload(urls: urls)
     }
 
-    /// Enqueues dropped/picked URLs into `destination` (S3.1). B10: the
+    /// Enqueues dropped/picked URLs into `destination` (S3.1; refused while
+    /// uploads are blocked — F8.4-U1). B10: the
     /// caller pins the destination — a folder-row drop passes that row's
     /// location, the table-level drop and the pickers pass the open
     /// folder — so a mid-drop navigation can't retarget the upload.
@@ -283,7 +321,7 @@ final class BrowserModel {
     /// root › row. Guards read-only roots so a stray drop on Photos
     /// never reaches the queue.
     func upload(urls: [URL], to destination: DriveLocation) async {
-        guard root.allowsWrites, !urls.isEmpty, let uploads = session.uploads else { return }
+        guard canUpload, !urls.isEmpty, let uploads = session.uploads else { return }
         let breadcrumb = ancestors(of: destination).map(\.name).joined(separator: " › ")
         await uploads.upload(urls: urls, to: destination, breadcrumb: breadcrumb)
     }
@@ -365,9 +403,11 @@ extension BrowserModel {
         ),
         items: [DriveItem] = PreviewFixtures.items,
         phase: LoadPhase = .loaded,
-        error: String? = nil
+        error: String? = nil,
+        uploadsBlocked: Bool? = nil
     ) -> BrowserModel {
         let model = BrowserModel(root: root, session: PreviewFixtures.session())
+        model.previewUploadsBlocked = uploadsBlocked
         let store = model.state(for: model.rootLocation)
         store.items = items
         if let error {

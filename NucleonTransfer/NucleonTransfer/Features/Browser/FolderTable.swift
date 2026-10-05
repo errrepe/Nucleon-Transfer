@@ -96,7 +96,7 @@ struct FolderTable: View {
             .alignment(.trailing)
         } rows: {
             ForEach(items) { item in
-                if item.isFolder && model.root.allowsWrites {
+                if item.isFolder && model.canUpload {
                     TableRow(item)
                         .onHover { hover.track(item, hovering: $0) }
                         // B10: a drop on this row uploads into THAT
@@ -124,10 +124,11 @@ struct FolderTable: View {
             if ids.isEmpty {
                 Button("New Folder") { model.showingNewFolder = true }
                     .disabled(!model.root.allowsWrites)
+                // F8.4-U1: also off while Proton blocks uploads (2000).
                 Button("Upload Files…") { Task { await model.uploadPanel(folders: false) } }
-                    .disabled(!model.root.allowsWrites)
+                    .disabled(!model.canUpload)
                 Button("Upload Folder…") { Task { await model.uploadPanel(folders: true) } }
-                    .disabled(!model.root.allowsWrites)
+                    .disabled(!model.canUpload)
                 Divider()
                 Button("Reload") { Task { await model.reloadCurrent() } }
             } else {

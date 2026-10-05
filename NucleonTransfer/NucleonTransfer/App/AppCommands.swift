@@ -54,17 +54,21 @@ struct AppCommands: Commands {
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .disabled(!canWrite)
 
+            // F8.4-U1: disabled (with the reason) once Proton refused an
+            // upload with code 2000 this run.
             Button("Upload Files…") {
                 Task { await browser?.uploadPanel(folders: false) }
             }
             .keyboardShortcut("u", modifiers: [.command])
-            .disabled(!canWrite)
+            .disabled(!canUpload)
+            .help(uploadHelp)
 
             Button("Upload Folder…") {
                 Task { await browser?.uploadPanel(folders: true) }
             }
             .keyboardShortcut("u", modifiers: [.command, .shift])
-            .disabled(!canWrite)
+            .disabled(!canUpload)
+            .help(uploadHelp)
         }
 
         // Go menu — Finder-style navigation: ⌘↑ up, ⌘↓ open, ⌘R reload.
@@ -140,6 +144,16 @@ struct AppCommands: Commands {
     /// Write-capable root on screen (not Photos, not signed out).
     private var canWrite: Bool {
         browser?.root.allowsWrites == true
+    }
+
+    /// Writable root and uploads not blocked by Proton (F8.4-U1).
+    private var canUpload: Bool {
+        browser?.canUpload == true
+    }
+
+    /// Menu-item tooltip: the blocked reason, else nothing.
+    private var uploadHelp: Text {
+        browser?.uploadsBlocked == true ? Text(UploadsBlockedCopy.message) : Text(verbatim: "")
     }
 
     /// Trash needs a writable root AND a non-empty selection.
