@@ -3,8 +3,10 @@
 // entirely when the account has no quota. The account menu is always rendered
 // so Sign Out stays reachable even if /users failed.
 // Polish pass: the quota bar fills from empty when the sidebar first
-// appears and eases to any later value (static under Reduce Motion). The
-// account is only refreshed at sign-in/restore today, so that is rare.
+// appears and eases to new values (static under Reduce Motion); the
+// "used" figure rolls. Pass 3: the account is refreshed ~2 s after the
+// app changes the drive (uploads, new folders, trash — the
+// remoteChangedToken bumps), so the gauge follows them.
 import SwiftUI
 
 struct StorageFooterView: View {
@@ -63,10 +65,24 @@ struct StorageFooterView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+                    .contentTransition(Motion.numeric(
+                        Double(session.account?.usedBytes ?? 0), reduceMotion: reduceMotion
+                    ))
+                    .animation(Motion.snappy, value: session.account?.usedBytes)
             }
             accountRow
         }
         .padding(12)
+        // Debounced refresh after the app changed the drive: each bump
+        // cancels the pending one, so a 300-file upload costs one /users
+        // call at the end. Token 0 is the session start (sign-in already
+        // fetched the account).
+        .task(id: session.activity.remoteChangedToken) {
+            guard session.activity.remoteChangedToken > 0 else { return }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            await session.refreshAccount()
+        }
         .confirmationDialog(
             hasActiveTransfers
                 ? "Sign out? Active transfers will be paused."
