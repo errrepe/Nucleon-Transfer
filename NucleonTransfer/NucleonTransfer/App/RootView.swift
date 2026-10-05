@@ -38,10 +38,6 @@ struct RootView: View {
             await session.restoreOnLaunch()
         }
         .animation(Motion.adaptive(Motion.smooth, reduceMotion: reduceMotion), value: session.phase)
-        // S4.2: publish the session for app-level menu commands (Sign
-        // Out, Show Transfers) — they must work even where no BrowserModel
-        // is on screen (e.g. the root-load error state).
-        .focusedSceneValue(\.appSession, session)
     }
 
     private var phaseTransition: AnyTransition {

@@ -64,6 +64,10 @@ final class AppSession {
     /// F8.5-V3: Touch ID was cancelled / unavailable at restore and the
     /// sealed session was KEPT — the login screen offers "Use Touch ID".
     private(set) var canRetryTouchID = false
+    /// App menu "Sign Out…" while the shell is up: the sidebar footer
+    /// picks this up and runs its confirmation flow (active-transfers
+    /// warning), even when the request came from the Settings window.
+    var signOutRequested = false
 
     let activity = TransferActivityStore()
     let queue: TransferQueue
