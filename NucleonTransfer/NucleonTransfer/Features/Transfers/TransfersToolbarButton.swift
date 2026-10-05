@@ -6,6 +6,10 @@
 // Badge note: `.badge(_:)` compiles on macOS but only renders inside
 // TabView/list rows — it is a no-op on an NSToolbarItem-backed button —
 // so the count rides on a small capsule overlay instead.
+// F8.4-U6: the capsule is accent-tinted for in-flight transfers and turns
+// red (with an exclamation glyph) only when something failed. The button
+// also feeds upload snapshots to the activity store's rate book — it is
+// the one view always on screen while uploads run.
 import AppKit
 import SwiftUI
 
@@ -16,8 +20,8 @@ struct TransfersToolbarButton: View {
     /// (crash B1: EnvironmentValues assert on a background-hosted item).
     let session: AppSession
 
-    private var activeCount: Int {
-        TransferDisplay.activeCount(
+    private var badgeState: TransferBadge {
+        TransferDisplay.badge(
             uploads: session.uploads?.jobs ?? [],
             downloads: session.activity.downloads
         )
@@ -29,17 +33,18 @@ struct TransfersToolbarButton: View {
             activity.presentTransfers.toggle()
         }
         // M4: match the View-menu wording ("Show Transfers") and say
-        // what the button does; the count rides along while items are
-        // in flight. The AX label keeps the shorter "Transfers" form.
+        // what the button does; the active/failed count rides along. The
+        // AX label keeps the shorter "Transfers" form.
         .help(
-            activeCount > 0
-                ? "Show Transfers — \(activeCount) active"
-                : "Show Transfers"
+            badgeState.summary.map { "Show Transfers — \($0)" } ?? "Show Transfers"
         )
         .accessibilityLabel(
-            activeCount > 0 ? "Transfers, \(activeCount) active" : "Transfers"
+            badgeState.summary.map { "Transfers, \($0)" } ?? "Transfers"
         )
         .overlay(alignment: .topTrailing) { badge }
+        .onChange(of: session.uploads?.jobs ?? [], initial: true) { _, jobs in
+            session.activity.recordUploadProgress(jobs)
+        }
         .popover(isPresented: $activity.presentTransfers, arrowEdge: .bottom) {
             // TransfersPanel takes pure inputs today; the injection is a
             // safety net for any future panel child that reads the
@@ -49,21 +54,42 @@ struct TransfersToolbarButton: View {
         }
     }
 
-    /// Active-count capsule. `monospacedDigit` keeps the capsule width
-    /// stable while the count changes.
+    /// Count capsule: accent tint while transfers run, red + "!" glyph
+    /// when any failed (state never conveyed by color alone).
+    /// `monospacedDigit` keeps the capsule width stable while the count
+    /// changes. Hidden from VoiceOver — the button label carries it.
     @ViewBuilder
     private var badge: some View {
-        if activeCount > 0 {
-            Text(activeCount, format: .number)
-                .font(.caption2)
-                .monospacedDigit()
-                .foregroundStyle(.white)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .background(.red, in: Capsule())
-                .offset(x: 6, y: -4)
-                .accessibilityHidden(true)
+        switch badgeState {
+        case .none:
+            EmptyView()
+        case let .active(count):
+            capsule(fill: AnyShapeStyle(.tint)) {
+                Text(count, format: .number)
+            }
+        case let .failed(count):
+            capsule(fill: AnyShapeStyle(.red)) {
+                HStack(spacing: 1) {
+                    Image(systemName: "exclamationmark")
+                        .fontWeight(.bold)
+                    Text(count, format: .number)
+                }
+            }
         }
+    }
+
+    private func capsule<Content: View>(
+        fill: AnyShapeStyle, @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .font(.caption2)
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(fill, in: Capsule())
+            .offset(x: 6, y: -4)
+            .accessibilityHidden(true)
     }
 
     private var panel: TransfersPanel {
@@ -73,6 +99,9 @@ struct TransfersToolbarButton: View {
             destinationNames: session.uploads?.destinationNames ?? [:],
             revealURLs: session.activity.revealURLs,
             lastError: session.uploads?.lastError,
+            bytesPerSecond: { [activity = session.activity] id, date in
+                activity.bytesPerSecond(id: id, at: date)
+            },
             handlers: TransfersPanel.Handlers(
                 pause: { [session] id in
                     Task { await session.uploads?.pause(id) }
@@ -131,6 +160,13 @@ struct TransfersToolbarButton: View {
     // download fixtures only, which still exercises the panel path.
     let session = PreviewFixtures.session()
     session.activity.downloads = PreviewFixtures.downloadRecords
+    return TransfersToolbarButton(session: session)
+        .padding(40)
+}
+
+#Preview("Toolbar Button — Failed") {
+    let session = PreviewFixtures.session()
+    session.activity.downloads = PreviewFixtures.downloadRecords + [PreviewFixtures.failedDownload]
     return TransfersToolbarButton(session: session)
         .padding(40)
 }
