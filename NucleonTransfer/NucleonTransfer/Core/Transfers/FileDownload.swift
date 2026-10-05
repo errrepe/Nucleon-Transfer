@@ -163,12 +163,21 @@ enum FileDownload {
         let part = try writePart(Data(), in: directory, name: name)
         do {
             let handle = try FileHandle(forWritingTo: part)
-            defer { try? handle.close() }
-            let size = try await streamBlocks(
-                ordered, contentKey: contentKey, signatures: signatures,
-                window: max(1, window), fetch: fetch, progress: progress
-            ) { try handle.write(contentsOf: $0) }
-            try handle.synchronize()
+            let size: Int64
+            do {
+                size = try await streamBlocks(
+                    ordered, contentKey: contentKey, signatures: signatures,
+                    window: max(1, window), fetch: fetch, progress: progress
+                ) { try handle.write(contentsOf: $0) }
+            } catch {
+                try? handle.close()
+                throw error
+            }
+            // Closed (errors surfaced) BEFORE the caller's exclusive rename.
+            // No fsync (F8.3 review): the rename alone gives atomic
+            // visibility, and a download lost to a crash is simply fetched
+            // again — durability isn't worth a flush per file.
+            try handle.close()
             return (part, size)
         } catch {
             try? FileManager.default.removeItem(at: part)

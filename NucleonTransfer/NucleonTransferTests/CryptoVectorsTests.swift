@@ -919,6 +919,35 @@ struct CryptoVectorsTests {
         #expect(body.range(of: bytes) != nil)
     }
 
+    @Test func storageMultipartIsExactlyPrefixBlockSuffix() {
+        // F8.3 review: single allocation, byte-exact framing around the block.
+        let bytes = Data((0..<5000).map { UInt8($0 & 0xFF) })
+        let body = FileUpload.multipartBlockBody(boundary: "BND", blockBytes: bytes)
+        let prefix = Data("--BND\r\nContent-Disposition: form-data; name=\"Block\"; filename=\"blob\"\r\nContent-Type: application/octet-stream\r\n\r\n".utf8)
+        let suffix = Data("\r\n--BND--\r\n".utf8)
+        #expect(body == prefix + bytes + suffix)
+        let empty = FileUpload.multipartBlockBody(boundary: "BND", blockBytes: Data())
+        #expect(empty == prefix + suffix)
+    }
+
+    @Test func xAttrModificationTimeIsRFC3339UTCWithZ() throws {
+        // F8.3 review: both official SDKs write UTC `Z` (js toISOString,
+        // C# "O"); every upstream parser accepts it — see xAttrJSON.
+        for (t, expected) in [
+            (1_700_000_000.0, "2023-11-14T22:13:20Z"),
+            (1_700_000_000.75, "2023-11-14T22:13:20Z"), // second precision
+            (0.0, "1970-01-01T00:00:00Z"),
+        ] {
+            let json = try FileUpload.xAttrJSON(
+                modificationTime: Date(timeIntervalSince1970: t),
+                size: 0, mimeType: "text/plain", blockSizes: [], sha1: Data(count: 20)
+            )
+            let dict = try #require(JSONSerialization.jsonObject(with: json) as? [String: Any])
+            let common = try #require(dict["Common"] as? [String: Any])
+            #expect(common["ModificationTime"] as? String == expected)
+        }
+    }
+
     @Test func blocksAndCommitJSONKeys() throws {
         // /drive/blocks + checkAvailableHashes wire keys (Go capitalized
         // field names); response fixtures decode with extras ignored.

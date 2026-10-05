@@ -105,6 +105,10 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
             )
             await progress(source.size)
             return done.linkID
+        } catch UploadSourceError.changedDuringUpload {
+            // F8.3 review: written/appended/replaced while it uploaded —
+            // the draft was discarded; a retry now would race the writer.
+            throw TransferFailure.permanent(UploadSourceError.changedMessage(fileName: job.fileName))
         } catch let error as UploadSourceError {
             // The file changed or became unreadable mid-upload: retrying
             // the same job would hit the same file — permanent.

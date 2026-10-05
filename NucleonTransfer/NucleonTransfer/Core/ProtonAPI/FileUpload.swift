@@ -300,11 +300,25 @@ enum FileUpload {
     /// PLAINTEXT sizes, `sha1` is the raw 20-byte SHA-1 of the whole
     /// plaintext (written as Digests.SHA1, lowercase hex).
     /// VARIANT-UNCERTAIN: exact schema (extra fields).
+    /// ModificationTime: RFC3339 UTC with second precision, `Z` designator
+    /// ("2023-11-14T22:13:20Z"). F8.3 review — what upstream writes/parses:
+    ///  - ProtonDriveApps/sdk js client/js/src/internal/nodes/
+    ///    extendedAttributes.ts writes `date.toISOString()` (UTC `Z`, ms)
+    ///    and parses with `new Date(...)` (any ISO 8601 incl. `Z`);
+    ///  - ProtonDriveApps/sdk C# client/cs/src/Proton.Drive.Sdk/
+    ///    Serialization/Iso8601DateTimeResultJsonConverter.cs (used by
+    ///    Api/Files/CommonExtendedAttributes.cs) writes UTC `ToString("O")`
+    ///    (`…Z`, 7 fraction digits), parses `TryGetDateTimeOffset` with a
+    ///    `DateTimeOffset.TryParse` fallback;
+    ///  - henrybear327/Proton-API-Bridge file_upload.go writes
+    ///    `"2006-01-02T15:04:05-0700"` (numeric offset, e.g. +0000) but
+    ///    file.go parses with relvacode `iso8601.ParseString` (accepts
+    ///    `Z`); go-proton-api keeps it a plain string.
+    /// Both official SDKs write `Z` and every parser accepts it: kept.
     static func xAttrJSON(
         modificationTime: Date, size: Int64, mimeType: String, blockSizes: [Int], sha1: Data
     ) throws -> Data {
-        // RFC3339 UTC with second precision (Go time.RFC3339 shape). New
-        // formatter per call: ISO8601DateFormatter is not Sendable (Swift 6).
+        // New formatter per call: ISO8601DateFormatter is not Sendable.
         let stamp: String = {
             let f = ISO8601DateFormatter()
             f.formatOptions = [.withInternetDateTime]
@@ -376,14 +390,26 @@ enum FileUpload {
 
     /// Builds a multipart/form-data body for one storage-block POST (part
     /// name "Block", filename "blob", application/octet-stream — log parity).
+    /// F8.3 review: ONE allocation of exactly prefix + block + suffix, the
+    /// block copied once into it — no intermediate Data per header line and
+    /// no growth reallocations (the old append chain could transiently hold
+    /// ~2x the block while `Data` doubled its buffer). A streamed body
+    /// (InputStream over [prefix, block, suffix]) would skip even that copy
+    /// but drops Content-Length to chunked encoding on URLSession and hides
+    /// the body from URLProtocol stubs; one 4 MiB copy per in-flight block
+    /// is the bounded cost kept instead.
     static func multipartBlockBody(boundary: String, blockBytes: Data) -> Data {
-        var out = Data()
-        out.append(Data("--\(boundary)\r\n".utf8))
-        out.append(Data("Content-Disposition: form-data; name=\"Block\"; filename=\"blob\"\r\n".utf8))
-        out.append(Data("Content-Type: application/octet-stream\r\n".utf8))
-        out.append(Data("\r\n".utf8))
+        let prefix = Array((
+            "--\(boundary)\r\n"
+            + "Content-Disposition: form-data; name=\"Block\"; filename=\"blob\"\r\n"
+            + "Content-Type: application/octet-stream\r\n"
+            + "\r\n"
+        ).utf8)
+        let suffix = Array("\r\n--\(boundary)--\r\n".utf8)
+        var out = Data(capacity: prefix.count + blockBytes.count + suffix.count)
+        out.append(contentsOf: prefix)
         out.append(blockBytes)
-        out.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        out.append(contentsOf: suffix)
         return out
     }
 

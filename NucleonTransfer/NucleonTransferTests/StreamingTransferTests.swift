@@ -125,6 +125,8 @@ private struct SlowFirstBlockSource: UploadBlockSource {
         if window > 1, index % window == 0, count > 0 { usleep(20_000) }
         return try DataBlockSource(data: data).read(offset: offset, count: count)
     }
+
+    func verifyUnchanged() throws {}
 }
 
 private actor Recorder<T: Sendable> {
@@ -381,6 +383,109 @@ private actor TaskBox {
         #expect(throws: UploadSourceError.self) {
             _ = try FileBlockSource(url: dir.appendingPathComponent("missing"))
         }
+    }
+}
+
+// MARK: - source changed during upload (F8.3 review)
+
+private func append(_ bytes: Data, to url: URL) throws {
+    let h = try FileHandle(forWritingTo: url)
+    defer { try? h.close() }
+    try h.seekToEnd()
+    try h.write(contentsOf: bytes)
+}
+
+@Suite struct SourceChangedDuringUploadTests {
+    /// Uploads `url` (4 blocks of 1 KiB, window 2 -> 2 batches); `mutate`
+    /// runs inside the fake API right after the first storage POST, i.e.
+    /// while the pipeline waits between batches.
+    private func upload(
+        _ url: URL, mutate: @escaping @Sendable () throws -> Void
+    ) async throws -> (api: FakeUploadAPI, error: Error?) {
+        let keys = try Keys()
+        let api = FakeUploadAPI()
+        await api.setAfterUpload { n in if n == 1 { try? mutate() } }
+        do {
+            _ = try await StreamingUpload.run(
+                api: api, shareID: "S", parentLinkID: "P", fileName: "grow.log",
+                source: FileBlockSource(url: url), parentKeys: keys.parentKeys,
+                parentHashKey: keys.parentHashKey, addressKeys: keys.addressKeys,
+                addressID: "A", blockSize: 1024, window: 2
+            )
+            return (api, nil)
+        } catch {
+            return (api, error)
+        }
+    }
+
+    @Test func fileAppendedMidUploadIsNotCommitted() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("grow.log")
+        try randomBytes(4096).write(to: url)
+        let (api, error) = try await upload(url) { try append(randomBytes(500), to: url) }
+        #expect(error as? UploadSourceError == .changedDuringUpload)
+        // Every block went out (reads never ran short), yet no commit: the
+        // draft is discarded instead of committing mixed content.
+        #expect(await api.uploads == 4)
+        #expect(await api.commit == nil)
+        #expect(await api.deleted == ["L1"])
+    }
+
+    @Test func fileRewrittenInPlaceSameSizeIsNotCommitted() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("grow.log")
+        try randomBytes(4096).write(to: url)
+        let old = Date(timeIntervalSince1970: 1_600_000_000)
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: url.path)
+        let (api, error) = try await upload(url) {
+            let h = try FileHandle(forWritingTo: url)
+            defer { try? h.close() }
+            try h.write(contentsOf: randomBytes(100)) // offset 0, size unchanged
+        }
+        #expect(error as? UploadSourceError == .changedDuringUpload)
+        #expect(await api.commit == nil)
+        #expect(await api.deleted == ["L1"])
+    }
+
+    @Test func fileReplacedAtItsPathIsNotCommitted() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("grow.log")
+        let data = randomBytes(4096)
+        try data.write(to: url)
+        // Atomic save: same bytes, new inode renamed over the path.
+        let (api, error) = try await upload(url) { try data.write(to: url, options: .atomic) }
+        #expect(error as? UploadSourceError == .changedDuringUpload)
+        #expect(await api.commit == nil)
+        #expect(await api.deleted == ["L1"])
+    }
+
+    @Test func untouchedFileCommits() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("still.bin")
+        try randomBytes(4096).write(to: url)
+        let (api, error) = try await upload(url) {}
+        #expect(error == nil)
+        #expect(await api.commit != nil)
+        #expect(await api.deleted.isEmpty)
+    }
+
+    @Test func dataSourceNeverReportsAChange() throws {
+        try DataBlockSource(data: randomBytes(10)).verifyUnchanged()
+    }
+
+    @Test func changedFileMessageIsActionableAndSurvivesTheHeuristics() {
+        // The name contains keywords the string heuristics react to
+        // ("photo", "500"): the message must pass through untouched.
+        let msg = UploadSourceError.changedMessage(fileName: "photo500.jpg")
+        #expect(msg == "photo500.jpg changed while it was uploading. Try again when it's no longer being written.")
+        #expect(UserFacingError.message(for: TransferFailure.permanent(msg)) == msg)
+        #expect(UserFacingError.message(for: UploadSourceError.changedDuringUpload)
+            .contains("changed while it was uploading"))
+        #expect(TransferErrorClassify.classify(TransferFailure.permanent(msg)) == .permanent(msg))
     }
 }
 

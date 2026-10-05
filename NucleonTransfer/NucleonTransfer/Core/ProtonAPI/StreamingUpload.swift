@@ -23,6 +23,10 @@
 //      discards the draft (detached, so a cancelled job still cleans up).
 // Progress is reported per uploaded block (cumulative plaintext bytes,
 // monotonic). Cancellation is checked between batches and before each POST.
+// F8.3 review: the source's identity (size, mtime, inode) is re-checked
+// after the last block and before the commit — a file written/appended
+// while it uploaded fails (draft discarded) instead of committing a
+// revision of mixed old/new content.
 
 import CryptoKit
 import Foundation
@@ -35,6 +39,9 @@ protocol UploadBlockSource: Sendable {
     var size: Int64 { get }
     /// Exactly `count` bytes at `offset` (throws when fewer are available).
     func read(offset: Int64, count: Int) throws -> Data
+    /// Throws `UploadSourceError.changedDuringUpload` when the content may
+    /// differ from what was there at open (called before the commit).
+    func verifyUnchanged() throws
 }
 
 enum UploadSourceError: Error, Sendable, Equatable {
@@ -42,6 +49,14 @@ enum UploadSourceError: Error, Sendable, Equatable {
     case readFailed(errno: Int32)
     /// The file got shorter while it was being uploaded.
     case truncated
+    /// Size, modification time or identity changed between open and the
+    /// commit (written to, appended, or replaced at its path).
+    case changedDuringUpload
+
+    /// Queue/UI message for `changedDuringUpload` (TransferFailure.permanent).
+    static func changedMessage(fileName: String) -> String {
+        "\(fileName) changed while it was uploading. Try again when it's no longer being written."
+    }
 }
 
 /// In-memory source (tests, the `data:` convenience).
@@ -56,14 +71,38 @@ struct DataBlockSource: UploadBlockSource {
         let start = data.startIndex + Int(offset)
         return Data(data[start..<(start + count)])
     }
+
+    /// Immutable bytes: never changes.
+    func verifyUnchanged() throws {}
 }
 
 /// File source over one read-only descriptor: `pread` is positional and
 /// thread-safe, so concurrent block reads need no shared cursor. The
-/// descriptor closes when the last reference goes away.
+/// descriptor closes when the last reference goes away. The file's
+/// identity at open (size, mtime, device/inode) is kept so the pipeline can
+/// refuse to commit content that changed underneath it (`verifyUnchanged`).
 final class FileBlockSource: UploadBlockSource {
+    /// What `verifyUnchanged` compares (plain integers: Sendable).
+    struct Identity: Equatable, Sendable {
+        var size: Int64
+        var mtimeSec: Int
+        var mtimeNsec: Int
+        var device: Int64
+        var inode: UInt64
+
+        init(_ st: stat) {
+            size = Int64(st.st_size)
+            mtimeSec = Int(st.st_mtimespec.tv_sec)
+            mtimeNsec = Int(st.st_mtimespec.tv_nsec)
+            device = Int64(st.st_dev)
+            inode = UInt64(st.st_ino)
+        }
+    }
+
     private let fd: Int32
-    let size: Int64
+    private let url: URL
+    let identity: Identity
+    var size: Int64 { identity.size }
 
     init(url: URL) throws {
         let fd = url.withUnsafeFileSystemRepresentation { path -> Int32 in
@@ -78,7 +117,29 @@ final class FileBlockSource: UploadBlockSource {
             throw UploadSourceError.cannotOpen(errno: err)
         }
         self.fd = fd
-        self.size = Int64(st.st_size)
+        self.url = url
+        self.identity = Identity(st)
+    }
+
+    /// Re-`fstat`s the open descriptor (written to / appended / truncated:
+    /// size or mtime moved) and `stat`s the path (an atomic save replaced
+    /// the file: another inode is there now). A path that no longer exists
+    /// is not a change: the descriptor still reads the bytes that were
+    /// uploaded, and they are consistent.
+    func verifyUnchanged() throws {
+        var st = stat()
+        guard fstat(fd, &st) == 0 else {
+            throw UploadSourceError.readFailed(errno: errno)
+        }
+        guard Identity(st) == identity else { throw UploadSourceError.changedDuringUpload }
+        var atPath = stat()
+        let rc = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return stat(path, &atPath)
+        }
+        if rc == 0, Identity(atPath) != identity {
+            throw UploadSourceError.changedDuringUpload
+        }
     }
 
     deinit { close(fd) }
@@ -195,6 +256,9 @@ enum StreamingUpload {
                 shareID: shareID, addressID: addressID,
                 blockSize: blockSize, window: max(1, window), progress: progress
             )
+            // Every block is stored; refuse to commit if the file moved
+            // under us (appended/rewritten/replaced) — mixed content.
+            try source.verifyUnchanged()
             let xattr = try FileUpload.xAttrJSON(
                 modificationTime: modificationTime, size: size,
                 mimeType: mime, blockSizes: manifest.plaintextSizes,

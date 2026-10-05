@@ -96,6 +96,9 @@ enum UserFacingError: Sendable {
         if let chain = error as? DecryptChainError {
             return message(forChain: chain)
         }
+        if let source = error as? UploadSourceError, source == .changedDuringUpload {
+            return "The file changed while it was uploading. Try again when it's no longer being written."
+        }
         if let upload = error as? FileUploadError {
             return "Upload preparation failed (\(upload)). Re-add the file and retry."
         }
@@ -120,6 +123,11 @@ enum UserFacingError: Sendable {
     /// through with a retry hint.
     static func message(forMessage msg: String) -> String {
         let lower = msg.lowercased()
+        // Already actionable and carries a file name, which must not trip
+        // the keyword heuristics below ("photo", "500", …).
+        if lower.contains("changed while it was uploading") {
+            return msg
+        }
         if lower.contains("2028") || lower.contains("rate limit") || lower.contains("rate-limit")
             || lower.contains("too many recent logins")
         {
