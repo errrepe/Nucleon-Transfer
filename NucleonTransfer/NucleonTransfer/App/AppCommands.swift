@@ -19,6 +19,9 @@ extension FocusedValues {
     /// The BrowserModel of the focused browser scene (nil while signed
     /// out or when no drive root is on screen).
     @Entry var browserModel: BrowserModel?
+    /// The browser's filter field has keyboard focus (F8.4-U3) — Move to
+    /// Trash steps aside so ⌘⌫ deletes to line start in the field.
+    @Entry var browserSearchFocused: Bool?
     /// The AppSession of the focused scene — for app-level commands
     /// (Show Transfers, Sign Out) that outlive any single browser.
     @Entry var appSession: AppSession?
@@ -33,6 +36,8 @@ extension FocusedValues {
 
 struct AppCommands: Commands {
     @FocusedValue(\.browserModel) private var browser
+    @FocusedValue(\.browserSearchFocused) private var searchFocused
+    @AppStorage(BrowserPreferences.showPathBarKey) private var showPathBar = false
     @FocusedValue(\.appSession) private var session
     @FocusedValue(\.requestSignOut) private var requestSignOut
 
@@ -54,21 +59,40 @@ struct AppCommands: Commands {
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .disabled(!canWrite)
 
+            // F8.4-U1: disabled (with the reason) once Proton refused an
+            // upload with code 2000 this run.
             Button("Upload Files…") {
                 Task { await browser?.uploadPanel(folders: false) }
             }
             .keyboardShortcut("u", modifiers: [.command])
-            .disabled(!canWrite)
+            .disabled(!canUpload)
+            .help(uploadHelp)
 
             Button("Upload Folder…") {
                 Task { await browser?.uploadPanel(folders: true) }
             }
             .keyboardShortcut("u", modifiers: [.command, .shift])
-            .disabled(!canWrite)
+            .disabled(!canUpload)
+            .help(uploadHelp)
         }
 
-        // Go menu — Finder-style navigation: ⌘↑ up, ⌘↓ open, ⌘R reload.
+        // Go menu — Finder-style navigation: ⌘[ / ⌘] back/forward (F8.4-U3),
+        // ⌘↑ up, ⌘↓ open, ⌘R reload.
         CommandMenu("Go") {
+            Button("Back") {
+                browser?.goBack()
+            }
+            .keyboardShortcut("[", modifiers: [.command])
+            .disabled(!(browser?.canGoBack ?? false))
+
+            Button("Forward") {
+                browser?.goForward()
+            }
+            .keyboardShortcut("]", modifiers: [.command])
+            .disabled(!(browser?.canGoForward ?? false))
+
+            Divider()
+
             Button("Enclosing Folder") {
                 browser?.goToParent()
             }
@@ -119,6 +143,13 @@ struct AppCommands: Commands {
             }
             .keyboardShortcut("t", modifiers: [.command, .option])
             .disabled(session?.phase != .signedIn || browser == nil)
+
+            // F8.4-U3: Finder's path bar, persisted in @AppStorage.
+            Button(showPathBar ? "Hide Path Bar" : "Show Path Bar") {
+                showPathBar.toggle()
+            }
+            .keyboardShortcut("p", modifiers: [.command, .option])
+            .disabled(browser == nil)
         }
 
         // App menu, after Settings… — same confirm flow as the account
@@ -159,9 +190,21 @@ struct AppCommands: Commands {
         browser?.root.allowsWrites == true
     }
 
-    /// Trash needs a writable root AND a non-empty selection.
+    /// Writable root and uploads not blocked by Proton (F8.4-U1).
+    private var canUpload: Bool {
+        browser?.canUpload == true
+    }
+
+    /// Menu-item tooltip: the blocked reason, else nothing.
+    private var uploadHelp: Text {
+        browser?.uploadsBlocked == true ? Text(UploadsBlockedCopy.message) : Text(verbatim: "")
+    }
+
+    /// Trash needs a writable root AND a non-empty selection — and the
+    /// filter field must not have focus, or ⌘⌫ would trash rows instead of
+    /// deleting to the start of the line (F8.4-U3).
     private var canTrash: Bool {
-        canWrite && !(browser?.selection.isEmpty ?? true)
+        canWrite && !(browser?.selection.isEmpty ?? true) && searchFocused != true
     }
 
     /// Mirror of the toolbar Reload button's busy state.

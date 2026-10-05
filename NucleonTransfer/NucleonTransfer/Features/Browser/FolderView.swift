@@ -9,6 +9,15 @@
 // F7.1 R5 feeds the New Folder sheet the decrypted sibling names for its
 // live duplicate check. Loading kicks off in .task(id:) so revisits are
 // cheap (cache hit in BrowserModel.load).
+// F8.4-U1: after a Proton 2000 upload refusal, one dismissible banner
+// joins the top inset and the Upload menu + drop target disable.
+// F8.4-U3: the sheet / trash dialog / error alert moved up to
+// BrowserContainerView (one presentation, bound to `model.current`); the
+// toolbar is grouped with fixed spacers ({Upload, New Folder}, {Download,
+// Trash}, Transfers) and Reload lives in the Go menu (⌘R), like Finder;
+// Back/Forward sit in the navigation area; a failed refresh over cached
+// rows shows the "Couldn't refresh" banner; the subtitle counts the
+// selection.
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -21,6 +30,9 @@ struct FolderView: View {
     /// (crash B1: EnvironmentValues assert). @Bindable keeps the $model.*
     /// bindings the toolbar, sheet and dialogs use.
     @Bindable var model: BrowserModel
+    /// Column widths/visibility/order, owned by BrowserContainerView's
+    /// @SceneStorage (F8.4-U4) — one value for every folder in the stack.
+    @Binding var columnCustomization: TableColumnCustomization<DriveItem>
     /// True while a file drag hovers the table — drives DropOverlay.
     @State private var isTargeted = false
     /// The row under the pointer, written by FolderTable — while a drag
@@ -37,18 +49,25 @@ struct FolderView: View {
     var body: some View {
         tableWithUploadDrop
             .safeAreaInset(edge: .top, spacing: 0) {
-                if model.root.kind == .photos {
-                    Label("Photos is read-only in Nucleon Transfer.", systemImage: "info.circle")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                        .background(.regularMaterial)
+                VStack(spacing: 0) {
+                    if model.root.kind == .photos {
+                        PhotosReadOnlyBanner()
+                    }
+                    if model.showsUploadsBlockedBanner {
+                        UploadsBlockedBanner { model.dismissUploadsBlockedBanner() }
+                    }
+                    if case .failed(let message) = state.phase, !state.items.isEmpty {
+                        RefreshFailedBanner(message: message) {
+                            Task { await model.load(location, force: true) }
+                        }
+                    }
                 }
             }
             .navigationTitle(location.name)
-            .navigationSubtitle(DriveFormatting.itemCount(items.count))
+            .navigationSubtitle(subtitle)
+            // The stack's own back chevron is replaced by the Finder-style
+            // Back/Forward group below (F8.4-U3).
+            .navigationBarBackButtonHidden(true)
             .toolbarTitleMenu {
                 // Finder-style: current folder first, root last.
                 ForEach(model.ancestors(of: location).reversed(), id: \.self) { ancestor in
@@ -56,10 +75,24 @@ struct FolderView: View {
                 }
             }
             .toolbar {
-                // Spec-6.2 order: Upload, New Folder, Download, Trash,
-                // Reload — then the S3.2 Transfers popover button. All
-                // act on `model.current` — the topmost FolderView owns
-                // the toolbar.
+                // F8.4-U3: Back/Forward (⌘[ / ⌘]), Finder's navigation
+                // group. The folder stack is the history, so Back pops.
+                ToolbarItem(placement: .navigation) {
+                    ControlGroup {
+                        Button("Back", systemImage: "chevron.backward") { model.goBack() }
+                            .help("See folders you viewed previously")
+                            .disabled(!model.canGoBack)
+                        Button("Forward", systemImage: "chevron.forward") { model.goForward() }
+                            .help("See folders you viewed next")
+                            .disabled(!model.canGoForward)
+                    }
+                    .controlGroupStyle(.navigation)
+                }
+                // Spec-6.2 order, grouped (F8.4-U3): {Upload, New Folder},
+                // {Download, Trash}, then the S3.2 Transfers popover.
+                // Reload is in Go ▸ Reload (⌘R) and the empty-area context
+                // menu. All act on `model.current` — the topmost
+                // FolderView owns the toolbar.
                 ToolbarItem(placement: .primaryAction) {
                     Menu("Upload", systemImage: "arrow.up.doc") {
                         Button("Upload Files…") {
@@ -69,10 +102,8 @@ struct FolderView: View {
                             Task { await model.uploadPanel(folders: true) }
                         }
                     }
-                    .help(model.root.allowsWrites
-                          ? "Upload files or a folder into this folder."
-                          : "Uploading to Photos isn't supported yet.")
-                    .disabled(!model.root.allowsWrites)
+                    .help(uploadHelp)
+                    .disabled(!model.canUpload)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("New Folder", systemImage: "folder.badge.plus") {
@@ -81,6 +112,7 @@ struct FolderView: View {
                     .help("New Folder")
                     .disabled(!model.root.allowsWrites)
                 }
+                ToolbarSpacer(.fixed, placement: .primaryAction)
                 ToolbarItem(placement: .primaryAction) {
                     Button("Download", systemImage: "arrow.down.circle") {
                         model.downloadItems(model.selection)
@@ -95,13 +127,7 @@ struct FolderView: View {
                     .help("Move to Trash")
                     .disabled(model.selection.isEmpty || !model.root.allowsWrites)
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Reload", systemImage: "arrow.clockwise") {
-                        Task { await model.reloadCurrent() }
-                    }
-                    .help("Reload")
-                    .disabled(state.phase == .loading)
-                }
+                ToolbarSpacer(.fixed, placement: .primaryAction)
                 ToolbarItem(placement: .primaryAction) {
                     // S3.2: transfers popover — badge counts in-flight items.
                     // R2/B1: session by parameter — toolbar items of a
@@ -109,49 +135,6 @@ struct FolderView: View {
                     TransfersToolbarButton(session: model.session)
                 }
             }
-            .sheet(isPresented: $model.showingNewFolder) {
-                NewFolderSheet(
-                    // R5: live duplicate check against the decrypted
-                    // sibling names — undecrypted items stay out and the
-                    // server remains the safety net.
-                    existingNames: Set(state.items.filter(\.isNameDecrypted).map(\.name))
-                ) { name in
-                    try await model.createFolder(named: name)
-                }
-            }
-            // F8.2-R8: counts and trashes `pendingTrash` (the clicked rows
-            // or the selection, whichever opened the dialog) — never the
-            // live selection, which a context-menu click doesn't move.
-            .confirmationDialog(
-                "Move ^[\(model.pendingTrash.count) item](inflect: true) to Trash?",
-                isPresented: $model.confirmingTrash,
-                titleVisibility: .visible
-            ) {
-                Button("Move to Trash", role: .destructive) {
-                    model.confirmTrash()
-                }
-                Button("Cancel", role: .cancel) {
-                    model.cancelTrash()
-                }
-            } message: {
-                Text("You can restore them from Trash in Proton Drive on the web.")
-            }
-            .alert(
-                "Couldn’t Move to Trash",
-                isPresented: Binding(
-                    get: { model.actionError != nil },
-                    set: { if !$0 { model.actionError = nil } }
-                ),
-                presenting: model.actionError
-            ) { _ in
-                Button("OK", role: .cancel) {}
-            } message: { message in
-                Text(message)
-            }
-            // S4.2: publish this browser to the menu bar (AppCommands).
-            // Every FolderView in the stack shares the same model, so the
-            // focused scene's value is unambiguous.
-            .focusedSceneValue(\.browserModel, model)
             .task(id: location) {
                 await model.load(location)
             }
@@ -168,7 +151,10 @@ struct FolderView: View {
     /// navigating while the providers resolve can't retarget the upload.
     @ViewBuilder
     private var tableWithUploadDrop: some View {
-        let table = FolderTable(items: items, model: model, hover: hover)
+        let table = FolderTable(
+            items: items, model: model, hover: hover,
+            columnCustomization: $columnCustomization
+        )
             .overlay { stateOverlay }
             .overlay {
                 if isTargeted {
@@ -176,7 +162,10 @@ struct FolderView: View {
                 }
             }
         if model.root.allowsWrites {
-            table.onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+            // F8.4-U1: while uploads are blocked the drop accepts no
+            // types (no highlight, refused) — same view structure, so the
+            // table keeps its selection and scroll position.
+            table.onDrop(of: model.uploadsBlocked ? [] : [.fileURL], isTargeted: $isTargeted) { providers in
                 Task {
                     let urls = await UploadCoordinator.droppedFileURLs(providers)
                     await model.upload(urls: urls, to: location)
@@ -195,7 +184,7 @@ struct FolderView: View {
     private var stateOverlay: some View {
         switch state.phase {
         case .loading where state.items.isEmpty:
-            ProgressView()
+            ProgressView("Loading…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let message) where state.items.isEmpty:
             ContentUnavailableView {
@@ -233,6 +222,21 @@ struct FolderView: View {
         default:
             EmptyView()
         }
+    }
+
+    /// "2 of 14 selected" / "14 items" (F8.4-U3). Counts selected rows
+    /// among the visible ones, so a filter never yields "3 of 2".
+    private var subtitle: String {
+        let selection = model.selection
+        let selected = selection.isEmpty ? 0 : items.lazy.filter { selection.contains($0.id) }.count
+        return DriveFormatting.subtitle(selected: selected, total: items.count)
+    }
+
+    /// Tooltip for the Upload menu: why it's disabled, when it is.
+    private var uploadHelp: Text {
+        if !model.root.allowsWrites { return Text("Uploading to Photos isn't supported yet.") }
+        if model.uploadsBlocked { return Text(UploadsBlockedCopy.message) }
+        return Text("Upload files or a folder into this folder.")
     }
 
     private var isFiltering: Bool {

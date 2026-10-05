@@ -7,6 +7,9 @@
 // F8.3-P3: each folder's cache is its own @Observable `FolderStore`, so a
 // listing landing in one folder only invalidates the views reading THAT
 // folder; the sorted/filtered rows are memoized per store.
+// F8.4-U3: Back/Forward — every path change feeds `forwardStack`, so a
+// pop (Go ▸ Back, breadcrumb, system gesture) can be re-pushed with
+// Forward until the user navigates somewhere new.
 import Foundation
 
 /// Cached listing for one folder (F8.3-P3: one observable object per
@@ -56,10 +59,17 @@ final class BrowserModel {
     /// breadcrumb read like the sidebar.
     let rootLocation: DriveLocation
     /// Pushed folders — bound directly to the NavigationStack. Clears the
-    /// selection on every change (forward, back, breadcrumb jump).
+    /// selection on every change (forward, back, breadcrumb jump) and
+    /// records the change in `forwardStack` (F8.4-U3).
     var path: [DriveLocation] = [] {
-        didSet { selection = [] }
+        didSet {
+            selection = []
+            forwardStack.record(from: oldValue, to: path)
+        }
     }
+    /// Folders Forward would reopen (F8.4-U3) — filled by pops, consumed
+    /// by Forward, cleared by any new navigation.
+    private(set) var forwardStack = ForwardStack<DriveLocation>()
     /// Where the window is right now: deepest pushed folder, or the root.
     var current: DriveLocation { path.last ?? rootLocation }
     /// Per-folder stores by folder linkID. Untracked and only ever grown
@@ -67,6 +77,8 @@ final class BrowserModel {
     /// loading one folder never invalidates another folder's views.
     @ObservationIgnored private var folders: [String: FolderStore] = [:]
     var selection: Set<DriveItem.ID> = []
+    /// Table sort; seeded from the saved preference (F8.4-U4 — the
+    /// container writes changes back to @AppStorage).
     var sortOrder: [KeyPathComparator<DriveItem>] = [
         KeyPathComparator(\.name, comparator: .localizedStandard)
     ]
@@ -92,6 +104,38 @@ final class BrowserModel {
     /// through @Observable property access).
     var remoteChangedToken: Int { session.activity.remoteChangedToken }
 
+    // MARK: - F8.4-U1 uploads blocked
+
+    /// Proton refused an upload from this app with code 2000 during this
+    /// run — every upload entry point disables itself (UploadCoordinator
+    /// owns the flag; it resets on sign-out and relaunch).
+    var uploadsBlocked: Bool {
+        #if DEBUG
+        if let previewUploadsBlocked { return previewUploadsBlocked }
+        #endif
+        return session.uploads?.uploadsBlocked ?? false
+    }
+
+    /// Upload controls are live: writable root and uploads not blocked.
+    var canUpload: Bool { root.allowsWrites && !uploadsBlocked }
+
+    /// The uploads-blocked banner is on screen (blocked, not dismissed).
+    var showsUploadsBlockedBanner: Bool {
+        guard uploadsBlocked else { return false }
+        #if DEBUG
+        if previewUploadsBlocked != nil { return !previewBannerDismissed }
+        #endif
+        return !(session.uploads?.uploadsBlockedBannerDismissed ?? false)
+    }
+
+    /// The banner's close button — the controls stay disabled.
+    func dismissUploadsBlockedBanner() {
+        #if DEBUG
+        if previewUploadsBlocked != nil { previewBannerDismissed = true; return }
+        #endif
+        session.uploads?.uploadsBlockedBannerDismissed = true
+    }
+
     /// The session this browser belongs to — also re-injected into the
     /// environment by BrowserContainerView so children (e.g. the S3.2
     /// transfers button) see the same instance, previews included.
@@ -101,10 +145,20 @@ final class BrowserModel {
     /// DEBUG preview seam: when true, `load` is a no-op so seeded folder
     /// states render offline (see `BrowserModel.preview` below).
     private var previewStubbed = false
+    #if DEBUG
+    /// Preview seam for the U1 banner (previews have no UploadCoordinator).
+    var previewUploadsBlocked: Bool?
+    private var previewBannerDismissed = false
+    #endif
 
-    init(root: DriveRoot, session: AppSession) {
+    init(
+        root: DriveRoot,
+        session: AppSession,
+        sortOrder: [KeyPathComparator<DriveItem>]? = nil
+    ) {
         self.root = root
         self.session = session
+        if let sortOrder { self.sortOrder = sortOrder }
         rootLocation = DriveLocation(
             shareID: root.shareID,
             linkID: root.rootLinkID,
@@ -185,6 +239,26 @@ final class BrowserModel {
         }
     }
 
+    /// F8.4-U4: reopens the folder chain saved for this root (link IDs
+    /// only) after a relaunch. Best-effort: each folder must still sit in
+    /// the previous one (FolderPathRestoration stops at the first missing
+    /// link), and nothing happens if the user navigated meanwhile.
+    func restorePath(linkIDs: [String]) async {
+        guard !previewStubbed, path.isEmpty, !linkIDs.isEmpty,
+              let listing = session.listing
+        else { return }
+        let resolved = await FolderPathRestoration.resolve(
+            linkIDs: linkIDs, root: rootLocation
+        ) { location in
+            let store = self.state(for: location)
+            if store.phase == .loaded, !store.isStale { return store.items }
+            guard self.session.listing === listing else { return nil }
+            return try? await listing.children(of: location)
+        }
+        guard path.isEmpty, session.listing === listing, !resolved.isEmpty else { return }
+        path = resolved
+    }
+
     /// Primary activation (double click / Open). Folders push onto the
     /// navigation path; files download via the session coordinator (S2.3).
     func open(_ item: DriveItem) {
@@ -209,10 +283,21 @@ final class BrowserModel {
         }
     }
 
-    /// Back one level (bound to nothing yet — the NavigationStack back
-    /// button already pops `path`; kept for keyboard/menu wiring).
+    /// Back one level (Go ▸ Enclosing Folder ⌘↑ and Go ▸ Back ⌘[ — the
+    /// folder stack is the history, so both pop).
     func goToParent() {
         if !path.isEmpty { path.removeLast() }
+    }
+
+    var canGoBack: Bool { !path.isEmpty }
+    var canGoForward: Bool { forwardStack.canGoForward }
+
+    /// Go ▸ Back (⌘[): pops one level; Forward can re-push it.
+    func goBack() { goToParent() }
+
+    /// Go ▸ Forward (⌘]): re-pushes the folder the last Back left.
+    func goForward() {
+        if let next = forwardStack.next { path.append(next) }
     }
 
     /// Breadcrumb jump: pops the path back to `loc` (root = pop everything).
@@ -268,12 +353,13 @@ final class BrowserModel {
     /// into the current folder via the session's UploadCoordinator.
     /// No-ops on read-only roots (Photos) or when uploads aren't wired.
     func uploadPanel(folders: Bool) async {
-        guard root.allowsWrites, session.uploads != nil else { return }
+        guard canUpload, session.uploads != nil else { return }
         let urls = await Panels.chooseUploadItems(folders: folders)
         await upload(urls: urls)
     }
 
-    /// Enqueues dropped/picked URLs into `destination` (S3.1). B10: the
+    /// Enqueues dropped/picked URLs into `destination` (S3.1; refused while
+    /// uploads are blocked — F8.4-U1). B10: the
     /// caller pins the destination — a folder-row drop passes that row's
     /// location, the table-level drop and the pickers pass the open
     /// folder — so a mid-drop navigation can't retarget the upload.
@@ -283,7 +369,7 @@ final class BrowserModel {
     /// root › row. Guards read-only roots so a stray drop on Photos
     /// never reaches the queue.
     func upload(urls: [URL], to destination: DriveLocation) async {
-        guard root.allowsWrites, !urls.isEmpty, let uploads = session.uploads else { return }
+        guard canUpload, !urls.isEmpty, let uploads = session.uploads else { return }
         let breadcrumb = ancestors(of: destination).map(\.name).joined(separator: " › ")
         await uploads.upload(urls: urls, to: destination, breadcrumb: breadcrumb)
     }
@@ -365,9 +451,11 @@ extension BrowserModel {
         ),
         items: [DriveItem] = PreviewFixtures.items,
         phase: LoadPhase = .loaded,
-        error: String? = nil
+        error: String? = nil,
+        uploadsBlocked: Bool? = nil
     ) -> BrowserModel {
         let model = BrowserModel(root: root, session: PreviewFixtures.session())
+        model.previewUploadsBlocked = uploadsBlocked
         let store = model.state(for: model.rootLocation)
         store.items = items
         if let error {
