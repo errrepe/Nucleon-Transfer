@@ -23,4 +23,11 @@ enum DriveFormatting {
     static func itemCount(_ n: Int) -> String {
         n == 1 ? "1 item" : "\(n) items"
     }
+
+    /// Window subtitle (F8.4-U3): "2 of 14 selected" while rows are
+    /// selected, the plain item count otherwise.
+    static func subtitle(selected: Int, total: Int) -> String {
+        guard selected > 0 else { return itemCount(total) }
+        return "\(min(selected, total)) of \(total) selected"
+    }
 }

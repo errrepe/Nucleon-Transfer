@@ -8,10 +8,19 @@
 // child, and are also repeated on the stack root + inside the
 // navigationDestination closure itself.
 // MainView gives each root its own instance with .id(root.id).
+// F8.4-U3: the New Folder sheet, trash confirmationDialog and action
+// alert are presented ONCE here (bound to `model.current`) instead of by
+// every FolderView in the stack; the filter field's focus is published
+// to the menu bar (⌘⌫ must stay delete-to-line-start while typing); the
+// optional path bar sits in the bottom safe-area inset.
 import SwiftUI
 
 struct BrowserContainerView: View {
     @State private var model: BrowserModel
+    /// The toolbar filter field has keyboard focus (F8.4-U3).
+    @FocusState private var isSearchFocused: Bool
+    /// View ▸ Show Path Bar (⌥⌘P).
+    @AppStorage(BrowserPreferences.showPathBarKey) private var showPathBar = false
 
     init(root: DriveRoot, session: AppSession) {
         _model = State(initialValue: BrowserModel(root: root, session: session))
@@ -38,6 +47,58 @@ struct BrowserContainerView: View {
             placement: .toolbar,
             prompt: "Filter this folder"
         )
+        .searchFocused($isSearchFocused)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if showPathBar {
+                PathBar(model: model)
+            }
+        }
+        .sheet(isPresented: $model.showingNewFolder) {
+            NewFolderSheet(
+                // R5: live duplicate check against the decrypted sibling
+                // names of the folder on screen — undecrypted items stay
+                // out and the server remains the safety net.
+                existingNames: Set(
+                    model.state(for: model.current).items
+                        .filter(\.isNameDecrypted).map(\.name)
+                )
+            ) { name in
+                try await model.createFolder(named: name)
+            }
+        }
+        // F8.2-R8: counts and trashes `pendingTrash` (the clicked rows or
+        // the selection, whichever opened the dialog) — never the live
+        // selection, which a context-menu click doesn't move.
+        .confirmationDialog(
+            "Move ^[\(model.pendingTrash.count) item](inflect: true) to Trash?",
+            isPresented: $model.confirmingTrash,
+            titleVisibility: .visible
+        ) {
+            Button("Move to Trash", role: .destructive) {
+                model.confirmTrash()
+            }
+            Button("Cancel", role: .cancel) {
+                model.cancelTrash()
+            }
+        } message: {
+            Text("You can restore them from Trash in Proton Drive on the web.")
+        }
+        .alert(
+            "Couldn’t Move to Trash",
+            isPresented: Binding(
+                get: { model.actionError != nil },
+                set: { if !$0 { model.actionError = nil } }
+            ),
+            presenting: model.actionError
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(message)
+        }
+        // S4.2: publish this browser to the menu bar (AppCommands), plus
+        // the filter focus so Move to Trash yields ⌘⌫ to the text field.
+        .focusedSceneValue(\.browserModel, model)
+        .focusedSceneValue(\.browserSearchFocused, isSearchFocused)
         // Post-operation consistency (S2.3): create/trash/upload publish
         // the touched parents → token bumps → markStale + reload.
         .task(id: model.remoteChangedToken) {
@@ -124,6 +185,19 @@ extension BrowserContainerView {
 
 #Preview("Uploads Blocked — Dark") {
     BrowserContainerView(preview: .preview(uploadsBlocked: true))
+        .frame(width: 720, height: 480)
+        .preferredColorScheme(.dark)
+}
+
+// F8.4-U3: a reload failed while earlier rows stay on screen.
+#Preview("Refresh Failed — Light") {
+    BrowserContainerView(preview: .preview(error: "Network issue."))
+        .frame(width: 720, height: 480)
+        .preferredColorScheme(.light)
+}
+
+#Preview("Refresh Failed — Dark") {
+    BrowserContainerView(preview: .preview(error: "Network issue."))
         .frame(width: 720, height: 480)
         .preferredColorScheme(.dark)
 }

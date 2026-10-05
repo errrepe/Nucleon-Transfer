@@ -19,6 +19,9 @@ extension FocusedValues {
     /// The BrowserModel of the focused browser scene (nil while signed
     /// out or when no drive root is on screen).
     @Entry var browserModel: BrowserModel?
+    /// The browser's filter field has keyboard focus (F8.4-U3) — Move to
+    /// Trash steps aside so ⌘⌫ deletes to line start in the field.
+    @Entry var browserSearchFocused: Bool?
     /// The AppSession of the focused scene — for app-level commands
     /// (Show Transfers, Sign Out) that outlive any single browser.
     @Entry var appSession: AppSession?
@@ -33,6 +36,8 @@ extension FocusedValues {
 
 struct AppCommands: Commands {
     @FocusedValue(\.browserModel) private var browser
+    @FocusedValue(\.browserSearchFocused) private var searchFocused
+    @AppStorage(BrowserPreferences.showPathBarKey) private var showPathBar = false
     @FocusedValue(\.appSession) private var session
     @FocusedValue(\.requestSignOut) private var requestSignOut
 
@@ -71,8 +76,23 @@ struct AppCommands: Commands {
             .help(uploadHelp)
         }
 
-        // Go menu — Finder-style navigation: ⌘↑ up, ⌘↓ open, ⌘R reload.
+        // Go menu — Finder-style navigation: ⌘[ / ⌘] back/forward (F8.4-U3),
+        // ⌘↑ up, ⌘↓ open, ⌘R reload.
         CommandMenu("Go") {
+            Button("Back") {
+                browser?.goBack()
+            }
+            .keyboardShortcut("[", modifiers: [.command])
+            .disabled(!(browser?.canGoBack ?? false))
+
+            Button("Forward") {
+                browser?.goForward()
+            }
+            .keyboardShortcut("]", modifiers: [.command])
+            .disabled(!(browser?.canGoForward ?? false))
+
+            Divider()
+
             Button("Enclosing Folder") {
                 browser?.goToParent()
             }
@@ -123,6 +143,13 @@ struct AppCommands: Commands {
             }
             .keyboardShortcut("t", modifiers: [.command, .option])
             .disabled(session?.phase != .signedIn || browser == nil)
+
+            // F8.4-U3: Finder's path bar, persisted in @AppStorage.
+            Button(showPathBar ? "Hide Path Bar" : "Show Path Bar") {
+                showPathBar.toggle()
+            }
+            .keyboardShortcut("p", modifiers: [.command, .option])
+            .disabled(browser == nil)
         }
 
         // App menu, after Settings… — same confirm flow as the account
@@ -156,9 +183,11 @@ struct AppCommands: Commands {
         browser?.uploadsBlocked == true ? Text(UploadsBlockedCopy.message) : Text(verbatim: "")
     }
 
-    /// Trash needs a writable root AND a non-empty selection.
+    /// Trash needs a writable root AND a non-empty selection — and the
+    /// filter field must not have focus, or ⌘⌫ would trash rows instead of
+    /// deleting to the start of the line (F8.4-U3).
     private var canTrash: Bool {
-        canWrite && !(browser?.selection.isEmpty ?? true)
+        canWrite && !(browser?.selection.isEmpty ?? true) && searchFocused != true
     }
 
     /// Mirror of the toolbar Reload button's busy state.

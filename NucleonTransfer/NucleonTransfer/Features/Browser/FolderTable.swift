@@ -15,6 +15,8 @@
 // F8.3-P3: the row under the pointer lives in a tiny @Observable
 // (`RowHoverState`) instead of FolderView @State — pointer moves no longer
 // re-evaluate FolderView/FolderTable, only the drop overlay that reads it.
+// F8.4-U3: a Kind column (UTType description, "Folder" for folders) and
+// Finder-style Modified dates ("Today at 14:32", "Yesterday at …").
 import SwiftUI
 
 /// The row under the pointer, written by FolderTable's row hover handlers
@@ -83,10 +85,17 @@ struct FolderTable: View {
                 .accessibilityLabel(Self.nameAccessibilityLabel(for: item))
             }
             .width(min: 160, ideal: 280)
+            TableColumn("Kind", value: \.kindDescription, comparator: .localizedStandard) { item in
+                Text(item.kindDescription)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .width(min: 80, ideal: 120)
             TableColumn("Modified", value: \.modified) { item in
-                Text(item.modified, format: .dateTime.day().month(.abbreviated).year().hour().minute())
+                Text(ModifiedDateFormatting.string(for: item.modified))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+                    .lineLimit(1)
             }
             TableColumn("Size", value: \.size) { item in
                 Text(DriveFormatting.size(item))

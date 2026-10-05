@@ -1,7 +1,8 @@
-// Nucleon Transfer — banners above the folder table (F8.4-U1).
+// Nucleon Transfer — banners above the folder table (F8.4-U1/U3).
 // One thin strip per condition, stacked in FolderView's top safe-area
-// inset (the Photos read-only pattern): Photos read-only and uploads
-// blocked by Proton (code 2000, dismissible, Learn More → README).
+// inset (the Photos read-only pattern): Photos read-only, uploads blocked
+// by Proton (code 2000, dismissible, Learn More → README), and "Couldn't
+// refresh" when a reload failed but earlier rows are still on screen.
 // System materials only; no custom glass on content.
 import SwiftUI
 
@@ -64,11 +65,30 @@ struct UploadsBlockedBanner: View {
     }
 }
 
+/// F8.4-U3: a reload failed while cached rows stay on screen — the table
+/// keeps the earlier listing, this strip says so and offers a retry.
+struct RefreshFailedBanner: View {
+    /// The mapped failure (UserFacingError), exposed as the tooltip.
+    let message: String
+    var onRetry: () -> Void
+
+    var body: some View {
+        BannerStrip {
+            Label("Couldn't refresh. Showing earlier results.", systemImage: "exclamationmark.arrow.circlepath")
+                .help(message)
+            Spacer(minLength: 8)
+            Button("Try Again", action: onRetry)
+                .controlSize(.small)
+        }
+    }
+}
+
 #if DEBUG
 #Preview("Banners — Light") {
     VStack(spacing: 0) {
         PhotosReadOnlyBanner()
         UploadsBlockedBanner {}
+        RefreshFailedBanner(message: "Network issue.") {}
     }
     .frame(width: 720)
     .preferredColorScheme(.light)
@@ -78,6 +98,7 @@ struct UploadsBlockedBanner: View {
     VStack(spacing: 0) {
         PhotosReadOnlyBanner()
         UploadsBlockedBanner {}
+        RefreshFailedBanner(message: "Network issue.") {}
     }
     .frame(width: 720)
     .preferredColorScheme(.dark)

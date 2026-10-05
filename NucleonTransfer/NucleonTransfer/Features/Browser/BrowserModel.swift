@@ -7,6 +7,9 @@
 // F8.3-P3: each folder's cache is its own @Observable `FolderStore`, so a
 // listing landing in one folder only invalidates the views reading THAT
 // folder; the sorted/filtered rows are memoized per store.
+// F8.4-U3: Back/Forward — every path change feeds `forwardStack`, so a
+// pop (Go ▸ Back, breadcrumb, system gesture) can be re-pushed with
+// Forward until the user navigates somewhere new.
 import Foundation
 
 /// Cached listing for one folder (F8.3-P3: one observable object per
@@ -56,10 +59,17 @@ final class BrowserModel {
     /// breadcrumb read like the sidebar.
     let rootLocation: DriveLocation
     /// Pushed folders — bound directly to the NavigationStack. Clears the
-    /// selection on every change (forward, back, breadcrumb jump).
+    /// selection on every change (forward, back, breadcrumb jump) and
+    /// records the change in `forwardStack` (F8.4-U3).
     var path: [DriveLocation] = [] {
-        didSet { selection = [] }
+        didSet {
+            selection = []
+            forwardStack.record(from: oldValue, to: path)
+        }
     }
+    /// Folders Forward would reopen (F8.4-U3) — filled by pops, consumed
+    /// by Forward, cleared by any new navigation.
+    private(set) var forwardStack = ForwardStack<DriveLocation>()
     /// Where the window is right now: deepest pushed folder, or the root.
     var current: DriveLocation { path.last ?? rootLocation }
     /// Per-folder stores by folder linkID. Untracked and only ever grown
@@ -246,10 +256,21 @@ final class BrowserModel {
         }
     }
 
-    /// Back one level (bound to nothing yet — the NavigationStack back
-    /// button already pops `path`; kept for keyboard/menu wiring).
+    /// Back one level (Go ▸ Enclosing Folder ⌘↑ and Go ▸ Back ⌘[ — the
+    /// folder stack is the history, so both pop).
     func goToParent() {
         if !path.isEmpty { path.removeLast() }
+    }
+
+    var canGoBack: Bool { !path.isEmpty }
+    var canGoForward: Bool { forwardStack.canGoForward }
+
+    /// Go ▸ Back (⌘[): pops one level; Forward can re-push it.
+    func goBack() { goToParent() }
+
+    /// Go ▸ Forward (⌘]): re-pushes the folder the last Back left.
+    func goForward() {
+        if let next = forwardStack.next { path.append(next) }
     }
 
     /// Breadcrumb jump: pops the path back to `loc` (root = pop everything).
