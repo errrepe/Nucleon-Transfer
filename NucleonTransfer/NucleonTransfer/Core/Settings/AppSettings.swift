@@ -56,6 +56,12 @@ enum AppSettings {
     /// field. Not a secret; kept whatever "Keep me signed in" says.
     static let lastUsernameKey = "lastUsername"
 
+    /// "Require Touch ID" (Settings › Account, default OFF; F8.5-V3). On =
+    /// the remembered session is sealed under a Touch ID protected key.
+    /// Only meaningful while "Keep me signed in" is on.
+    static let requireTouchIDKey = "requireTouchID"
+    static let defaultRequireTouchID = false
+
     // MARK: Readers
 
     static func keepsSignedIn(_ defaults: UserDefaults) -> Bool {
@@ -65,6 +71,15 @@ enum AppSettings {
     static func lastUsername(_ defaults: UserDefaults) -> String? {
         guard let name = defaults.string(forKey: lastUsernameKey), !name.isEmpty else { return nil }
         return name
+    }
+
+    static func requiresTouchID(_ defaults: UserDefaults) -> Bool {
+        bool(defaults, requireTouchIDKey, fallback: defaultRequireTouchID)
+    }
+
+    /// "Forget This Mac": the login field starts empty again.
+    static func clearLastUsername(in defaults: UserDefaults) {
+        defaults.removeObject(forKey: lastUsernameKey)
     }
 
     static func setLastUsername(_ name: String, in defaults: UserDefaults) {

@@ -13,6 +13,8 @@
 // off deletes any remembered session), the username prefilled from the
 // last successful sign-in, and a Try Again button when a remembered
 // session couldn't be restored for lack of network.
+// F8.5-V3: a "Use Touch ID" button when the Touch ID prompt for a sealed
+// remembered session was cancelled (or unavailable) — the session is kept.
 import AppKit // NSApp.applicationIconImage — header icon
 import SwiftUI
 
@@ -102,6 +104,14 @@ struct LoginView: View {
                 // retry it without the password.
                 Button("Try Again") {
                     Task { await session.restoreRememberedSession() }
+                }
+                .disabled(isSigningIn)
+            }
+            if session.canRetryTouchID {
+                Button {
+                    Task { await session.restoreRememberedSession() }
+                } label: {
+                    Label("Use Touch ID", systemImage: "touchid")
                 }
                 .disabled(isSigningIn)
             }
@@ -241,6 +251,22 @@ extension LoginView {
     return LoginView(initialUsername: "raphael")
         .environment(session)
         .preferredColorScheme(.light)
+}
+
+#Preview("Touch ID Cancelled — Light") {
+    let session = AppSession.preview(phase: .signedOut, canRetryTouchID: true)
+    session.loginError = RestoreFailure.message(for: .retryTouchID)
+    return LoginView(initialUsername: "raphael")
+        .environment(session)
+        .preferredColorScheme(.light)
+}
+
+#Preview("Touch ID Cancelled — Dark") {
+    let session = AppSession.preview(phase: .signedOut, canRetryTouchID: true)
+    session.loginError = RestoreFailure.message(for: .retryTouchID)
+    return LoginView(initialUsername: "raphael")
+        .environment(session)
+        .preferredColorScheme(.dark)
 }
 
 #Preview("Signing In — Light") {

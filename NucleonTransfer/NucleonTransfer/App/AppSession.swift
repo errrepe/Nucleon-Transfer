@@ -11,6 +11,11 @@
 // only); every token rotation is written through; launch restores it
 // (`.restoring`) through the same `finishUnlock` tail as a password
 // login. Sign-out deletes the item before anything else.
+// F8.5-V3 "Require Touch ID": the stored blob is sealed under a Touch ID
+// protected KEK (SessionVault); the restore's first step is the Touch ID
+// prompt — cancel keeps the items and offers "Use Touch ID", changed
+// fingerprints delete them. Settings re-seals/unseals the live item and
+// "Forget This Mac" drops both items + the remembered username.
 import Foundation
 
 @MainActor
@@ -50,6 +55,9 @@ final class AppSession {
     /// F8.5: the last restore failed on the network and the remembered
     /// session was KEPT — the login screen offers Retry (RestoreFailure).
     private(set) var canRetryRestore = false
+    /// F8.5-V3: Touch ID was cancelled / unavailable at restore and the
+    /// sealed session was KEPT — the login screen offers "Use Touch ID".
+    private(set) var canRetryTouchID = false
 
     let activity = TransferActivityStore()
     let queue: TransferQueue
@@ -136,6 +144,7 @@ final class AppSession {
         loginError = nil
         twoFactorError = nil
         canRetryRestore = false
+        canRetryTouchID = false
         loginUsername = username
         await installTokenObserver()
         clearPendingPassword() // re-entry: never overwrite live bytes unzeroed
@@ -232,20 +241,41 @@ final class AppSession {
     /// Keychain item and offers Retry; anything else (401 / refresh token
     /// rejected / key unlock failed) deletes it and lands on the password
     /// login, username prefilled, with a short "sign in again" note.
+    /// V3: a sealed item first needs the Touch ID KEK (`vault.unlock`) —
+    /// cancel / unavailable keeps it and offers "Use Touch ID"; changed
+    /// fingerprints delete it. No network call happens before that.
     func restoreRememberedSession() async {
         guard phase == .signedOut else { return }
-        guard var remembered = await vault.load() else {
+        guard await vault.hasRememberedSession() else {
             canRetryRestore = false
+            canRetryTouchID = false
             return
         }
-        // Drop our copy of the salted key password once done (best-effort:
-        // by then KeyringCache's unlock has released its references).
-        defer { remembered.wipe() }
         await installTokenObserver()
         phase = .restoring
         loginError = nil
         twoFactorError = nil
         canRetryRestore = false
+        canRetryTouchID = false
+        var remembered: RememberedSession
+        switch await vault.unlock(reason: Self.touchIDUnlockReason) {
+        case let .session(session):
+            remembered = session
+        case .absent:
+            if phase == .restoring { phase = .signedOut }
+            return
+        case let .failed(failure):
+            guard phase == .restoring else { return }
+            let decision = RestoreFailure.decision(for: failure)
+            canRetryTouchID = RestoreFailure.keepsRememberedSession(decision)
+            loginError = RestoreFailure.message(for: decision)
+            phase = .signedOut
+            return
+        }
+        // Drop our copy of the salted key password once done (best-effort:
+        // by then KeyringCache's unlock has released its references).
+        defer { remembered.wipe() }
+        guard phase == .restoring else { return }
         loginUsername = remembered.username
         // The restore's own refresh rotates the refresh token — it must
         // land in the Keychain, or the next launch would replay a spent one.
@@ -270,7 +300,36 @@ final class AppSession {
     func forgetRememberedSession() async {
         remembersSession = false
         canRetryRestore = false
+        canRetryTouchID = false
         await vault.delete()
+    }
+
+    /// Settings › "Forget This Mac": deletes the remembered session (both
+    /// Keychain items) and the remembered username. The live session, if
+    /// any, keeps running — it just won't be resumed after quitting.
+    func forgetThisMac() async {
+        remembersSession = false
+        canRetryRestore = false
+        canRetryTouchID = false
+        await SavedSignIn.forgetThisMac(vault: vault, defaults: defaults)
+    }
+
+    /// Settings › "Require Touch ID" switched: re-seal (on) or unseal (off)
+    /// the stored session, if any — may show Touch ID when turning off
+    /// without the key in memory. false = not applied (toggle reverts).
+    func setRequireTouchID(_ required: Bool) async -> Bool {
+        await vault.setSealed(required, reason: Self.touchIDDisableReason)
+    }
+
+    /// Touch ID prompt text ("Nucleon Transfer is trying to …").
+    static var touchIDUnlockReason: String {
+        String(localized: "unlock your saved sign-in",
+               comment: "Touch ID prompt: “Nucleon Transfer is trying to unlock your saved sign-in.”")
+    }
+
+    static var touchIDDisableReason: String {
+        String(localized: "turn off Touch ID for your saved sign-in",
+               comment: "Touch ID prompt when switching Require Touch ID off")
     }
 
     /// Restore failed: full cleanup either way. Network failure → keep the
@@ -281,7 +340,7 @@ final class AppSession {
         let username = loginUsername
         let decision = RestoreFailure.decision(for: error)
         await tearDown(reason: RestoreFailure.message(for: decision),
-                       keepRemembered: decision == .keepAndRetry)
+                       keepRemembered: RestoreFailure.keepsRememberedSession(decision))
         canRetryRestore = decision == .keepAndRetry
         loginUsername = username
     }
@@ -291,8 +350,13 @@ final class AppSession {
     /// is left. `saltedPass` is the caller's buffer (wiped by its owner).
     /// A Keychain failure never fails the sign-in — the session just isn't
     /// remembered.
+    /// V3: "Require Touch ID" seals it under a fresh Touch ID KEK; when
+    /// Touch ID is required but not available right now (lid closed, no
+    /// enrolled finger) nothing is stored — never a silent plain copy.
     private func rememberSessionIfEnabled(saltedPass: Data) async {
+        let sealed = AppSettings.requiresTouchID(defaults)
         guard AppSettings.keepsSignedIn(defaults), let username = loginUsername,
+              !sealed || BiometryAvailability.isAvailable(),
               let tokens = await sessions.currentTokens()
         else {
             remembersSession = false
@@ -301,10 +365,13 @@ final class AppSession {
         }
         remembersSession = true
         do {
+            // A fresh login always starts a fresh KEK (any cached one
+            // belonged to the previous item).
+            await vault.lock()
             try await vault.save(RememberedSession(
                 uid: tokens.uid, refreshToken: tokens.refreshToken,
                 saltedKeyPass: saltedPass, username: username
-            ))
+            ), sealed: sealed)
             // A rotation that landed while saving went to the old item (or
             // nowhere): re-sync to the current token.
             if let latest = await sessions.currentTokens(), latest != tokens {
@@ -362,10 +429,16 @@ final class AppSession {
     /// The sign-out body. `keepRemembered` (only a network-failed restore)
     /// keeps the Keychain item and drops the session locally without the
     /// server-side revoke, so Retry can still use the refresh token.
+    /// The cached Touch ID KEK goes either way (`delete` or `lock`).
     private func tearDown(reason: String?, keepRemembered: Bool) async {
         remembersSession = false
         canRetryRestore = false
-        if !keepRemembered { await vault.delete() }
+        canRetryTouchID = false
+        if keepRemembered {
+            await vault.lock()
+        } else {
+            await vault.delete()
+        }
         // F8.2-R5: download Tasks hold the coordinator, adapter and their
         // address-key copies — stop them (records land as "Cancelled")
         // before the keys are dropped below.
@@ -528,12 +601,14 @@ extension AppSession {
         roots: DriveRoots? = nil,
         rootsError: String? = nil,
         twoFactorError: String? = nil,
-        canRetryRestore: Bool = false
+        canRetryRestore: Bool = false,
+        canRetryTouchID: Bool = false
     ) -> AppSession {
         let session = AppSession(queueStoreURL: nil, vault: SessionVault(store: InMemoryKeychainStore()))
         session.phase = phase
         session.twoFactorError = twoFactorError
         session.canRetryRestore = canRetryRestore
+        session.canRetryTouchID = canRetryTouchID
         session.account = account
         session.roots = roots
         session.rootsError = rootsError
