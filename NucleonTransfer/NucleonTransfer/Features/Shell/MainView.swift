@@ -8,11 +8,15 @@
 // string form), read directly by the binding so the first frame already
 // shows the restored root; a vanished share falls back to the first root.
 // Polish pass: loading → split view / error crossfades.
+// Each root's BrowserModel is cached for the life of the shell, so a
+// sidebar switch back to a root lands on its folder and rows without a
+// spinner (live audit); sign-out unmounts MainView and drops the cache.
 import SwiftUI
 
 struct MainView: View {
     @Environment(AppSession.self) private var session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var browsers = BrowserCache()
     /// SidebarItem.storageValue; "" = nothing selected.
     @SceneStorage(BrowserPreferences.sidebarSelectionKey)
     private var storedSelection = SidebarItem.myFiles.storageValue
@@ -55,7 +59,7 @@ struct MainView: View {
             if let root = selectedRoot(in: roots) {
                 // One browser stack per root — .id rebuilds the model, path
                 // and caches when the sidebar selection changes.
-                BrowserContainerView(root: root, session: session)
+                BrowserContainerView(model: browsers.model(for: root, session: session))
                     .id(root.id)
             } else if roots.all.isEmpty {
                 ContentUnavailableView(
@@ -85,6 +89,24 @@ struct MainView: View {
     private func selectedRoot(in roots: DriveRoots) -> DriveRoot? {
         guard let item = selection.wrappedValue else { return nil }
         return item.root(in: roots) ?? roots.all.first
+    }
+}
+
+/// One BrowserModel per drive root, created on first visit. A plain
+/// reference (not observed): filling it during a body pass invalidates
+/// nothing.
+@MainActor
+private final class BrowserCache {
+    private var models: [String: BrowserModel] = [:]
+
+    func model(for root: DriveRoot, session: AppSession) -> BrowserModel {
+        if let model = models[root.id] { return model }
+        let model = BrowserModel(
+            root: root, session: session,
+            sortOrder: BrowserPreferences.savedSortOrder()
+        )
+        models[root.id] = model
+        return model
     }
 }
 

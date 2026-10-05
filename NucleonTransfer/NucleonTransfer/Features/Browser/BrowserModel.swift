@@ -10,6 +10,9 @@
 // F8.4-U3: Back/Forward — every path change feeds `forwardStack`, so a
 // pop (Go ▸ Back, breadcrumb, system gesture) can be re-pushed with
 // Forward until the user navigates somewhere new.
+// Root switching keeps one model per root alive (MainView's cache), so
+// coming back to a root shows its folder and rows at once; `reappear()`
+// then revalidates in the background.
 import Foundation
 
 /// Cached listing for one folder (F8.3-P3: one observable object per
@@ -367,6 +370,39 @@ final class BrowserModel {
     /// Post-operation consistency (uploads/deletes in S2.3): flags every
     /// touched parent as stale, and refetches only if one of them is the
     /// folder on screen. Other stale folders lazily refresh on next visit.
+    /// Set once the container has shown this model — a later appearance
+    /// is a return to this root from another one (MainView's cache).
+    @ObservationIgnored private(set) var hasAppeared = false
+    /// The folder chain as last seen on screen. Tearing the stack down on
+    /// a root switch resets the bound `path` to [], so a return to this
+    /// root puts the chain back from here.
+    @ObservationIgnored private var parkedPath: [DriveLocation] = []
+
+    /// The container saw `path` change while on screen.
+    func pathChangedOnScreen() {
+        parkedPath = path
+    }
+
+    /// The container came on screen. On a return to this root: pick up a
+    /// sort changed in another root (the preference is app-wide) and
+    /// revalidate everything — remote changes published while the root
+    /// was off screen were never seen (`observeRemoteChanges` only reads
+    /// the latest set). Cached rows stay up while the reload runs.
+    func reappear(savedSortOrder: [KeyPathComparator<DriveItem>]) {
+        defer { hasAppeared = true }
+        guard hasAppeared else { return }
+        if path.isEmpty, !parkedPath.isEmpty { path = parkedPath }
+        if sortOrder != savedSortOrder { sortOrder = savedSortOrder }
+        markAllStale()
+    }
+
+    /// Every cached folder refetches on its next load; the current one
+    /// reloads now.
+    func markAllStale() {
+        for store in folders.values { store.isStale = true }
+        Task { await load(current) }
+    }
+
     func markStale(parentLinkIDs: Set<String>) {
         for linkID in parentLinkIDs {
             folders[linkID]?.isStale = true // never-visited folders: nothing cached

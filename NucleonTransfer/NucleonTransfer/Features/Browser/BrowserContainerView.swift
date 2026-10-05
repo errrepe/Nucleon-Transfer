@@ -9,7 +9,8 @@
 // B1). The .environment calls below stay as a safety net for any other
 // child, and are also repeated on the stack root + inside the
 // navigationDestination closure itself.
-// MainView gives each root its own instance with .id(root.id).
+// MainView gives each root its own view identity with .id(root.id) and
+// hands back the same cached BrowserModel when a root is revisited.
 // F8.4-U3: the New Folder sheet, trash confirmationDialog and action
 // alert are presented by ONE FolderView at a time — the topmost
 // (`BrowserPresentations`, bound only where location == model.current).
@@ -44,11 +45,9 @@ struct BrowserContainerView: View {
     @AppStorage(AppSettings.suppressTrashConfirmationKey)
     private var suppressTrashConfirmation = AppSettings.defaultSuppressTrashConfirmation
 
-    init(root: DriveRoot, session: AppSession) {
-        _model = State(initialValue: BrowserModel(
-            root: root, session: session,
-            sortOrder: BrowserPreferences.savedSortOrder()
-        ))
+    /// A model kept alive across root switches (MainView's cache).
+    init(model: BrowserModel) {
+        _model = State(initialValue: model)
     }
 
     var body: some View {
@@ -97,7 +96,11 @@ struct BrowserContainerView: View {
                 lastFolder = FolderPathRestoration.encode(shareID: model.root.shareID, path: model.path)
             }
         }
+        .onAppear {
+            model.reappear(savedSortOrder: BrowserPreferences.savedSortOrder())
+        }
         .onChange(of: model.path) { _, path in
+            model.pathChangedOnScreen()
             lastFolder = FolderPathRestoration.encode(shareID: model.root.shareID, path: path)
         }
         .onChange(of: model.sortOrder) { _, order in
