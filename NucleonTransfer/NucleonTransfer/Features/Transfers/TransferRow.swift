@@ -151,7 +151,9 @@ struct TransferRow: View {
     ) -> some View {
         Button(label, systemImage: systemImage, action: action)
             .labelStyle(.iconOnly)
-            .buttonStyle(.borderless)
+            // Flat at rest, a soft wash on hover (HoverButtonStyle), so the
+            // small glyphs read as clickable.
+            .buttonStyle(.hover)
             .help(label)
     }
 }

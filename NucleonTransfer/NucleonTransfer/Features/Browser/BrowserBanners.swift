@@ -76,7 +76,8 @@ struct UploadsBlockedBanner: View {
                     .frame(width: 22, height: 22)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.borderless)
+            // Hover highlight (HoverButtonStyle).
+            .buttonStyle(.hover)
             .help("Dismiss")
             .accessibilityLabel("Dismiss")
         }

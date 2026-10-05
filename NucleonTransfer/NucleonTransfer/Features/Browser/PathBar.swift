@@ -28,7 +28,8 @@ struct PathBar: View {
                         Label(location.name, systemImage: index == 0 ? rootSymbol : "folder")
                             .lineLimit(1)
                     }
-                    .buttonStyle(.borderless)
+                    // Hover highlight, like Finder's path bar segments.
+                    .buttonStyle(.hover)
                     .help(location.name)
                 }
             }
