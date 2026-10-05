@@ -17,6 +17,9 @@
 // (@SceneStorage, link IDs only, re-walked best-effort after the roots
 // load) and the table's column widths/visibility/order; the sort order is
 // app-wide (@AppStorage).
+// F8.4-U7b: the trash confirmation carries a "Don't ask again" checkbox
+// bound to the same setting as Settings › General "Ask before moving to
+// Trash" (BrowserModel.requestTrash skips the dialog when it's off).
 import SwiftUI
 
 struct BrowserContainerView: View {
@@ -33,6 +36,9 @@ struct BrowserContainerView: View {
     /// in the stack.
     @SceneStorage(BrowserPreferences.columnCustomizationKey)
     private var columnCustomization = TableColumnCustomization<DriveItem>()
+    /// "Don't ask again" on the trash confirmation (AppSettings).
+    @AppStorage(AppSettings.suppressTrashConfirmationKey)
+    private var suppressTrashConfirmation = AppSettings.defaultSuppressTrashConfirmation
 
     init(root: DriveRoot, session: AppSession) {
         _model = State(initialValue: BrowserModel(
@@ -98,6 +104,7 @@ struct BrowserContainerView: View {
         } message: {
             Text("You can restore them from Trash in Proton Drive on the web.")
         }
+        .dialogSuppressionToggle(isSuppressed: $suppressTrashConfirmation)
         .alert(
             "Couldn’t Move to Trash",
             isPresented: Binding(

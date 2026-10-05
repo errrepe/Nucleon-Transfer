@@ -21,24 +21,28 @@ server-side allowlist — see Known limitations.)
 ## Status
 
 `0.1.0-alpha`. All crypto, networking and the native UI are implemented and
-verified; the offline test suite is green (`swift test`, 198 tests). This is an
+verified; the offline test suite is green (`swift test`, 565 tests). This is an
 alpha: expect rough edges and read the known limitations below.
 
 ## Features
 
-- **Sign in** with your Proton account (SRP-6a), TOTP two-factor support,
-  automatic session refresh.
+- **Sign in** with your Proton account (SRP-6a), two-factor with an
+  authenticator code or a recovery code, automatic session refresh.
 - **Browse** My Files, Photos (read-only) and Computers in a native
-  `NavigationSplitView` + `Table` browser: navigate folders, sort, filter,
-  multi-select.
+  `NavigationSplitView` + `Table` browser: navigate folders with
+  Back/Forward, an optional path bar, sortable Name/Kind/Size/Modified
+  columns, filter, multi-select; the window remembers its folder, columns
+  and sort.
 - **New Folder** and **Move to Trash** from the toolbar, context menu or
   keyboard.
 - **Upload** files and folders by dropping them on the table or via the
   Upload menu — recursive, hierarchy-preserving, resumable queue with
-  pause / cancel / retry and a Transfers popover.
-- **Download** selected files and folders to any folder via the system
-  picker — mirrors the remote tree, verifies SHA-256 per block, atomic
-  writes.
+  pause / cancel / retry and a Transfers popover with speed and time left.
+- **Download** selected files and folders via the system picker or
+  straight to a default folder — several at once, each cancellable,
+  mirrors the remote tree, verifies SHA-256 per block, atomic writes.
+- **Settings**: default download folder, simultaneous uploads/downloads,
+  open Transfers on start, ask before moving to Trash.
 - All listing, decryption and transfers run off the main thread in actors.
 
 ## Requirements

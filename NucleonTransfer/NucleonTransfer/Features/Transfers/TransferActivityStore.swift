@@ -70,8 +70,8 @@ final class TransferActivityStore {
         }
     }
 
-    /// Upload samples for the rate book: every queue snapshot that reaches
-    /// the UI (TransfersToolbarButton observes UploadCoordinator.jobs).
+    /// Upload samples for the rate book: every queue snapshot
+    /// (UploadCoordinator's listener is the single caller, F8.4-U7b).
     /// Duplicate observations of one snapshot are dropped by the estimator.
     func recordUploadProgress(_ jobs: [TransferJob]) {
         rates.record(uploads: jobs, at: now())

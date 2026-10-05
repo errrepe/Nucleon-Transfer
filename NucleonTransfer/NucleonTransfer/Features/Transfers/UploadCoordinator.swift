@@ -13,6 +13,9 @@
 // disables every upload entry point and shows one banner. In memory only:
 // AppSession builds a fresh coordinator per sign-in, and a relaunch
 // starts unblocked, so a server-side allowlist change is picked up.
+// F8.4-U7b: the snapshot listener is the single feed of upload speed
+// samples (TransferActivityStore.recordUploadProgress), and intake opens
+// the Transfers popover only when Settings › General allows it.
 import Foundation
 import UniformTypeIdentifiers
 
@@ -93,6 +96,9 @@ final class UploadCoordinator {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.jobs = snap
+                    // Speed/ETA samples (F8.4-U6): every snapshot the
+                    // queue publishes, whether or not a view is on screen.
+                    self.activity.recordUploadProgress(snap)
                     let doneNow = Set(snap.filter { $0.state == .done }.map(\.id))
                     let newDone = doneNow.subtracting(self.knownDone)
                     if !newDone.isEmpty {
@@ -207,7 +213,9 @@ final class UploadCoordinator {
                 // Folder creation happened inside enqueueTree (parent→child):
                 // the remote tree changed under the destination.
                 activity.remoteChanged(parentLinkIDs: [destination.linkID])
-                activity.presentTransfers = true
+                if AppSettings.opensTransfersOnStart(.standard) {
+                    activity.presentTransfers = true
+                }
             } catch {
                 if granted { url.stopAccessingSecurityScopedResource() }
                 lastError = "\(url.lastPathComponent): \(UserFacingError.message(for: error))"

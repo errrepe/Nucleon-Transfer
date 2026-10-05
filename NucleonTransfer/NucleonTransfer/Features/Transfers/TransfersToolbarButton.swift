@@ -7,9 +7,9 @@
 // TabView/list rows — it is a no-op on an NSToolbarItem-backed button —
 // so the count rides on a small capsule overlay instead.
 // F8.4-U6: the capsule is accent-tinted for in-flight transfers and turns
-// red (with an exclamation glyph) only when something failed. The button
-// also feeds upload snapshots to the activity store's rate book — it is
-// the one view always on screen while uploads run.
+// red (with an exclamation glyph) only when something failed. Upload speed
+// samples come from UploadCoordinator's snapshot listener (F8.4-U7b), not
+// from this view.
 import AppKit
 import SwiftUI
 
@@ -42,9 +42,6 @@ struct TransfersToolbarButton: View {
             badgeState.summary.map { "Transfers, \($0)" } ?? "Transfers"
         )
         .overlay(alignment: .topTrailing) { badge }
-        .onChange(of: session.uploads?.jobs ?? [], initial: true) { _, jobs in
-            session.activity.recordUploadProgress(jobs)
-        }
         .popover(isPresented: $activity.presentTransfers, arrowEdge: .bottom) {
             // TransfersPanel takes pure inputs today; the injection is a
             // safety net for any future panel child that reads the

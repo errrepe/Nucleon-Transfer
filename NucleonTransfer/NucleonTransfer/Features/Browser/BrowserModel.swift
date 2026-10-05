@@ -395,10 +395,16 @@ final class BrowserModel {
     }
 
     /// Opens the trash confirmation for `ids` (F8.2-R8). No-op on an empty
-    /// set or a read-only root.
+    /// set or a read-only root. With "Ask before moving to Trash" off
+    /// (Settings, or the dialog's "Don't ask again" — F8.4-U7b) the items
+    /// go to Trash straight away (still restorable from the web Trash).
     func requestTrash(_ ids: Set<DriveItem.ID>) {
         guard !ids.isEmpty, root.allowsWrites else { return }
         pendingTrash = ids
+        guard AppSettings.confirmsTrash(.standard) else {
+            confirmTrash()
+            return
+        }
         confirmingTrash = true
     }
 

@@ -238,7 +238,7 @@ enum TransferDisplay {
             }
             return "Uploaded"
         case .failed:
-            return UserFacingError.message(forMessage: job.errorMessage ?? "Upload failed")
+            return UserFacingError.message(forJob: job)
         case .cancelled:
             return "Cancelled"
         }

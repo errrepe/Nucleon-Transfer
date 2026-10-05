@@ -81,6 +81,17 @@ enum UserFacingError: Sendable {
         return somethingWentWrong
     }
 
+    /// Failed upload row text (F8.4-U7b): the typed `errorCode` decides
+    /// first — Proton 2000 (not allowlisted) gets the short text whatever
+    /// the envelope said. Jobs persisted before `errorCode` existed (nil)
+    /// fall back to the string path, which still parses "api 2000: …".
+    static func message(forJob job: TransferJob) -> String {
+        if job.errorCode == UploadBlockDetection.notAllowlistedCode {
+            return uploadAllowlisted
+        }
+        return message(forMessage: job.errorMessage ?? "Upload failed")
+    }
+
     /// Mapping for already-stringified queue messages (TransferJob.errorMessage
     /// persists as String). Understands the name-free tokens written by
     /// `TransferErrorClassify` ("api N: …", "http N: …", "rate limited"),
