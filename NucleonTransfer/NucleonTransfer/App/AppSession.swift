@@ -6,6 +6,11 @@
 // unlock, and that buffer is zeroed on every path (success, error, cancel,
 // sign-out). Best-effort: the String the login field handed over, and any
 // copy the runtime made, cannot be wiped (F8.1-S7).
+// F8.5 "Keep me signed in" (opt-in): after a full login the refresh token,
+// UID and salted key password go to SessionVault (Keychain, this device
+// only); every token rotation is written through; launch restores it
+// (`.restoring`) through the same `finishUnlock` tail as a password
+// login. Sign-out deletes the item before anything else.
 import Foundation
 
 @MainActor
@@ -16,6 +21,7 @@ final class AppSession {
         case signingIn      // SRP handshake in flight
         case needsTwoFactor // TOTP required; password retained for post-2FA unlock
         case unlocking      // session OK; decrypting key hierarchy (salts → user → address)
+        case restoring      // F8.5: remembered session — refresh + key unlock, no password
         case signedIn
     }
 
@@ -41,6 +47,9 @@ final class AppSession {
     /// Proton user ID of the signed-in account — scopes the upload queue
     /// (F8.2-R7 / B12). nil while signed out.
     private(set) var accountID: String?
+    /// F8.5: the last restore failed on the network and the remembered
+    /// session was KEPT — the login screen offers Retry (RestoreFailure).
+    private(set) var canRetryRestore = false
 
     let activity = TransferActivityStore()
     let queue: TransferQueue
@@ -48,6 +57,20 @@ final class AppSession {
     let keyrings: KeyringCache
     /// The ONLY DriveClient in the app — features share this instance.
     let drive: DriveClient
+    /// "Keep me signed in" storage (F8.5) — Keychain in the app, in-memory
+    /// for previews/demo.
+    let vault: SessionVault
+    /// Settings source (keep-signed-in preference, last username).
+    private let defaults: UserDefaults
+    /// True while the Keychain item belongs to the live session: token
+    /// rotations are written through to it. Set before a restore's own
+    /// refresh and before saving; cleared synchronously at sign-out,
+    /// before any await, so a late rotation can't rewrite a deleted item
+    /// (`updateTokens` never creates one either).
+    private var remembersSession = false
+    /// The SessionManager token observer is installed lazily (it needs
+    /// `self`, which init can't hand out); first sign-in/restore does it.
+    private var observesTokens = false
 
     /// Unlocked address keys (share-passphrase chain root). Memory only.
     private(set) var addressKeys: [KeyringCache.UnlockedKey] = []
@@ -85,7 +108,13 @@ final class AppSession {
     /// on the login screen (S4.3 audit).
     private(set) var loginUsername: String?
 
-    init(queueStoreURL: URL? = TransferQueue.defaultStoreURL()) {
+    init(
+        queueStoreURL: URL? = TransferQueue.defaultStoreURL(),
+        vault: SessionVault? = nil,
+        defaults: UserDefaults = .standard
+    ) {
+        self.vault = vault ?? SessionVault(store: LiveKeychainStore())
+        self.defaults = defaults
         let sessions = SessionManager()
         self.sessions = sessions
         keyrings = KeyringCache(sessions: sessions)
@@ -106,7 +135,9 @@ final class AppSession {
         phase = .signingIn
         loginError = nil
         twoFactorError = nil
+        canRetryRestore = false
         loginUsername = username
+        await installTokenObserver()
         clearPendingPassword() // re-entry: never overwrite live bytes unzeroed
         pendingPassword = Data(password.utf8)
         do {
@@ -186,9 +217,123 @@ final class AppSession {
             return
         }
         clearPendingPassword()
+        if let loginUsername { AppSettings.setLastUsername(loginUsername, in: defaults) }
         await refreshAccount()
         phase = .signedIn
         await loadRoots()
+    }
+
+    // MARK: - keep me signed in (F8.5)
+
+    /// Launch path (RootView.task) and the login screen's Retry: resumes
+    /// the remembered session, if any — refresh from the stored token, then
+    /// the shared `finishUnlock` with the stored salted key password.
+    /// Failure policy (RestoreFailure): a plain network failure KEEPS the
+    /// Keychain item and offers Retry; anything else (401 / refresh token
+    /// rejected / key unlock failed) deletes it and lands on the password
+    /// login, username prefilled, with a short "sign in again" note.
+    func restoreRememberedSession() async {
+        guard phase == .signedOut else { return }
+        guard var remembered = await vault.load() else {
+            canRetryRestore = false
+            return
+        }
+        // Drop our copy of the salted key password once done (best-effort:
+        // by then KeyringCache's unlock has released its references).
+        defer { remembered.wipe() }
+        await installTokenObserver()
+        phase = .restoring
+        loginError = nil
+        twoFactorError = nil
+        canRetryRestore = false
+        loginUsername = remembered.username
+        // The restore's own refresh rotates the refresh token — it must
+        // land in the Keychain, or the next launch would replay a spent one.
+        remembersSession = true
+        do {
+            try await sessions.restore(uid: remembered.uid, refreshToken: remembered.refreshToken)
+            guard phase == .restoring else { return }
+            try await finishUnlock(saltedPass: remembered.saltedKeyPass)
+        } catch {
+            guard phase == .restoring else { return }
+            await failRestore(error)
+            return
+        }
+        guard phase == .restoring else { return }
+        await refreshAccount()
+        phase = .signedIn
+        await loadRoots()
+    }
+
+    /// Deletes the remembered session (login screen: "Keep me signed in"
+    /// turned off). Never touches the live session.
+    func forgetRememberedSession() async {
+        remembersSession = false
+        canRetryRestore = false
+        await vault.delete()
+    }
+
+    /// Restore failed: full cleanup either way. Network failure → keep the
+    /// item, drop the half-session locally WITHOUT revoking it server-side
+    /// (its refresh token is what Retry needs). Auth/unlock failure →
+    /// `signOut` (deletes the item first, revokes if there is a session).
+    private func failRestore(_ error: Error) async {
+        let username = loginUsername
+        let decision = RestoreFailure.decision(for: error)
+        await tearDown(reason: RestoreFailure.message(for: decision),
+                       keepRemembered: decision == .keepAndRetry)
+        canRetryRestore = decision == .keepAndRetry
+        loginUsername = username
+    }
+
+    /// After a full password login (incl. 2FA): stores the remembered
+    /// session when "Keep me signed in" is on, otherwise makes sure none
+    /// is left. `saltedPass` is the caller's buffer (wiped by its owner).
+    /// A Keychain failure never fails the sign-in — the session just isn't
+    /// remembered.
+    private func rememberSessionIfEnabled(saltedPass: Data) async {
+        guard AppSettings.keepsSignedIn(defaults), let username = loginUsername,
+              let tokens = await sessions.currentTokens()
+        else {
+            remembersSession = false
+            await vault.delete()
+            return
+        }
+        remembersSession = true
+        do {
+            try await vault.save(RememberedSession(
+                uid: tokens.uid, refreshToken: tokens.refreshToken,
+                saltedKeyPass: saltedPass, username: username
+            ))
+            // A rotation that landed while saving went to the old item (or
+            // nowhere): re-sync to the current token.
+            if let latest = await sessions.currentTokens(), latest != tokens {
+                try await vault.updateTokens(uid: latest.uid, refreshToken: latest.refreshToken)
+            }
+        } catch {
+            remembersSession = false
+            await vault.delete()
+        }
+    }
+
+    /// Installs the SessionManager token observer once (see
+    /// `tokensChanged`).
+    private func installTokenObserver() async {
+        guard !observesTokens else { return }
+        observesTokens = true
+        await sessions.setTokenObserver { [weak self] tokens in
+            await self?.tokensChanged(tokens)
+        }
+    }
+
+    /// Token rotation → Keychain, only while the item belongs to the live
+    /// session. nil (session ended) is deliberately ignored: sign-out
+    /// deletes the item itself, first, and a network-failed restore keeps
+    /// it on purpose. A failed write leaves the old (spent) token behind;
+    /// the next restore then fails as an auth error and deletes the item.
+    private func tokensChanged(_ tokens: SessionTokens?) async {
+        guard let tokens, remembersSession else { return }
+        _ = try? await vault.updateTokens(uid: tokens.uid, refreshToken: tokens.refreshToken)
     }
 
     /// Full `signOut` cleanup for a sign-in that got past SRP and then
@@ -203,11 +348,24 @@ final class AppSession {
         UserFacingError.message(for: error)
     }
 
-    /// Sign-out order (S0.3): cancel in-flight downloads and pause + detach
-    /// the upload queue BEFORE dropping auth, revoke the session
-    /// server-side (best-effort), wipe key seeds, then reset UI-visible
-    /// state. `reason` lands on the login screen.
+    /// Sign-out order (S0.3; F8.5): delete the remembered session FIRST —
+    /// before any network call and before keys drop — then cancel in-flight
+    /// downloads and pause + detach the upload queue BEFORE dropping auth,
+    /// revoke the session server-side (best-effort), wipe key seeds, then
+    /// reset UI-visible state. `reason` lands on the login screen. Every
+    /// sign-out forgets the remembered session, including the unrecoverable
+    /// 401 one (BrowserModel) and a failed sign-in/2FA (`abortSignIn`).
     func signOut(reason: String? = nil) async {
+        await tearDown(reason: reason, keepRemembered: false)
+    }
+
+    /// The sign-out body. `keepRemembered` (only a network-failed restore)
+    /// keeps the Keychain item and drops the session locally without the
+    /// server-side revoke, so Retry can still use the refresh token.
+    private func tearDown(reason: String?, keepRemembered: Bool) async {
+        remembersSession = false
+        canRetryRestore = false
+        if !keepRemembered { await vault.delete() }
         // F8.2-R5: download Tasks hold the coordinator, adapter and their
         // address-key copies — stop them (records land as "Cancelled")
         // before the keys are dropped below.
@@ -228,7 +386,11 @@ final class AppSession {
         uploads = nil
         roots = nil
         rootsError = nil
-        await sessions.signOut()
+        if keepRemembered {
+            await sessions.discard()
+        } else {
+            await sessions.signOut()
+        }
         // Drop our seed references first so lock() can zero the last copy.
         addressKeys = []
         await keyrings.lock()
@@ -281,18 +443,36 @@ final class AppSession {
 
     // MARK: - internals
 
-    /// Salts → user keys → address keys, while the password grant is fresh
-    /// (moved from LoginViewModel, semantics unchanged). Seeds stay in the
-    /// KeyringCache actor + `addressKeys` (memory only, never disk).
+    /// Password path: salts (needs the fresh password grant) → salted key
+    /// password → the shared `finishUnlock`, then (F8.5) the remembered
+    /// session if opted in — saved from the same buffer before it is wiped.
     private func finishSignIn() async throws {
         guard let pwd = pendingPassword else { throw ProtonAPIError.unauthorized }
         let user = try await keyrings.fetchUser()
         let primaryID = user.primaryKey?.id ?? ""
         var salted = try await sessions.fetchSaltedKeyPass(password: pwd, primaryKeyID: primaryID)
-        // Password-equivalent: zeroed once the user keys are unlocked (or
-        // the unlock failed). KeyringCache's copy is gone by then.
+        // Password-equivalent: zeroed once the user keys are unlocked and
+        // the vault has encoded its copy (or anything failed). Every other
+        // reference (KeyringCache, the RememberedSession) is gone by then,
+        // so the wipe hits the real bytes.
         defer { SecureBytes.wipe(&salted) }
-        let userKeys = try await keyrings.unlockUserKeys(saltedPass: salted)
+        try await finishUnlock(saltedPass: salted, user: user)
+        await rememberSessionIfEnabled(saltedPass: salted)
+    }
+
+    /// Unlock tail shared by password login and restore (F8.5): user keys
+    /// → address keys → resolver + coordinators → queue scope. Seeds stay
+    /// in the KeyringCache actor + `addressKeys` (memory only, never
+    /// disk). Does not wipe `saltedPass` — its owner does. `user` skips a
+    /// /users fetch when the caller already has it.
+    private func finishUnlock(saltedPass: Data, user knownUser: ProtonUser? = nil) async throws {
+        let user: ProtonUser
+        if let knownUser {
+            user = knownUser
+        } else {
+            user = try await keyrings.fetchUser()
+        }
+        let userKeys = try await keyrings.unlockUserKeys(saltedPass: saltedPass)
         addressKeys = try await keyrings.unlockAddressKeys(userKeys: userKeys)
         let resolver = NodeKeyResolver(source: drive, addressKeys: addressKeys)
         self.resolver = resolver
@@ -347,11 +527,13 @@ extension AppSession {
         account: Account? = nil,
         roots: DriveRoots? = nil,
         rootsError: String? = nil,
-        twoFactorError: String? = nil
+        twoFactorError: String? = nil,
+        canRetryRestore: Bool = false
     ) -> AppSession {
-        let session = AppSession(queueStoreURL: nil)
+        let session = AppSession(queueStoreURL: nil, vault: SessionVault(store: InMemoryKeychainStore()))
         session.phase = phase
         session.twoFactorError = twoFactorError
+        session.canRetryRestore = canRetryRestore
         session.account = account
         session.roots = roots
         session.rootsError = rootsError
@@ -363,7 +545,7 @@ extension AppSession {
     /// YES`. resolver/coordinators stay nil so the write UI is disabled, and
     /// `roots` loads through the normal `loadRoots()` path.
     static func demo() -> AppSession {
-        let session = AppSession(queueStoreURL: nil)
+        let session = AppSession(queueStoreURL: nil, vault: SessionVault(store: InMemoryKeychainStore()))
         session.phase = .signedIn
         session.account = Account(
             email: "demo@example.com", displayName: "Demo",

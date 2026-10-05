@@ -1437,6 +1437,17 @@
         }
       }
     },
+    "Keep me signed in" : {
+      "comment" : "Login screen checkbox (F8.5)",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manter sessão iniciada"
+          }
+        }
+      }
+    },
     "Kind" : {
       "comment" : "Table column",
       "localizations" : {
@@ -1667,13 +1678,13 @@
         }
       }
     },
-    "Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored." : {
+    "Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored. “Keep me signed in” saves a session token in this Mac's keychain." : {
       "comment" : "About panel / Settings › About disclaimer",
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Nucleon Transfer é um app independente e de código aberto. Ele não é afiliado nem endossado pela Proton AG. Sua senha é usada apenas para iniciar sessão e desbloquear suas chaves neste Mac — ela nunca é armazenada."
+            "value" : "O Nucleon Transfer é um app independente e de código aberto. Ele não é afiliado nem endossado pela Proton AG. Sua senha é usada apenas para iniciar sessão e desbloquear suas chaves neste Mac — ela nunca é armazenada. A opção “Manter sessão iniciada” guarda um token de sessão nas Chaves deste Mac."
           }
         }
       }
@@ -2252,6 +2263,17 @@
         }
       }
     },
+    "Stay signed in on this Mac after you quit. Your password is never stored." : {
+      "comment" : "Login screen “Keep me signed in” tooltip",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue com a sessão iniciada neste Mac depois de encerrar o app. Sua senha nunca é armazenada."
+          }
+        }
+      }
+    },
     "Storage" : {
       "comment" : "VoiceOver label of the storage gauge",
       "localizations" : {
@@ -2765,6 +2787,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Seu Mac não conseguiu gerar os dados aleatórios seguros necessários para iniciar sessão. Tente novamente; se continuar acontecendo, reinicie o Mac."
+          }
+        }
+      }
+    },
+    "Your saved sign-in has expired. Please sign in again." : {
+      "comment" : "Login screen: a remembered session could not be restored",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sua sessão salva expirou. Inicie sessão novamente."
           }
         }
       }

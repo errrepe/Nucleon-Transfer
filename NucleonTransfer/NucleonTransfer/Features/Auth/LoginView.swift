@@ -9,11 +9,19 @@
 // lives as zeroed-after-use Data inside AppSession.pendingPassword. The
 // field's own String storage cannot be wiped (Swift strings are immutable
 // values); it is dropped, not zeroed.
+// F8.5: "Keep me signed in" checkbox (default off, @AppStorage; turning it
+// off deletes any remembered session), the username prefilled from the
+// last successful sign-in, and a Try Again button when a remembered
+// session couldn't be restored for lack of network.
 import AppKit // NSApp.applicationIconImage — header icon
 import SwiftUI
 
 struct LoginView: View {
     @Environment(AppSession.self) private var session
+    @AppStorage(AppSettings.keepSignedInKey)
+    private var keepSignedIn = AppSettings.defaultKeepSignedIn
+    @AppStorage(AppSettings.lastUsernameKey)
+    private var lastUsername = ""
     @State private var username = ""
     @State private var password = ""
     @FocusState private var focus: Field?
@@ -75,6 +83,11 @@ struct LoginView: View {
                 .disabled(isSigningIn)
                 .onSubmit(signIn)
                 .accessibilityLabel("Password")
+                Toggle("Keep me signed in", isOn: $keepSignedIn)
+                    .toggleStyle(.checkbox)
+                    .disabled(isSigningIn)
+                    .help("Stay signed in on this Mac after you quit. Your password is never stored.")
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(width: 360)
             if let error = session.loginError {
@@ -83,6 +96,14 @@ struct LoginView: View {
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: 360)
+            }
+            if session.canRetryRestore {
+                // The remembered session survived a network failure:
+                // retry it without the password.
+                Button("Try Again") {
+                    Task { await session.restoreRememberedSession() }
+                }
+                .disabled(isSigningIn)
             }
             Button(action: signIn) {
                 Group {
@@ -115,7 +136,7 @@ struct LoginView: View {
             .font(.callout)
             Divider()
                 .frame(width: 360)
-            Text("Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored.")
+            Text("Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored. “Keep me signed in” saves a session token in this Mac's keychain.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -128,12 +149,13 @@ struct LoginView: View {
             // A failed 2FA lands back here with the typed username gone
             // (this view unmounted while the prompt was up) — repopulate
             // it from the session so only the password needs retyping.
-            if username.isEmpty, let loginUsername = session.loginUsername {
-                username = loginUsername
+            // Otherwise (F8.5) the last account that signed in on this Mac.
+            if username.isEmpty {
+                username = session.loginUsername ?? lastUsername
             }
-            // Back from a failed 2FA/unlock with the username kept: the
-            // password is what needs retyping.
-            focus = session.loginError != nil && !username.isEmpty ? .password : .username
+            // A prefilled username (failed 2FA/unlock, or a previous
+            // sign-in): the password is what needs typing.
+            focus = username.isEmpty ? .username : .password
             // A 2FA failure lands back here with the error already set —
             // onChange missed it while the view was unmounted, so announce
             // it on appear too.
@@ -142,6 +164,10 @@ struct LoginView: View {
         .onChange(of: session.loginError) { _, error in
             announce(error)
             if error != nil, !isSigningIn { focus = .password }
+        }
+        .onChange(of: keepSignedIn) { _, keep in
+            // Off = nothing may stay in the Keychain (F8.5).
+            if !keep { Task { await session.forgetRememberedSession() } }
         }
         .onChange(of: isSigningIn) { _, signingIn in
             // The fields were disabled during SRP; after a failure the
@@ -207,6 +233,14 @@ extension LoginView {
     return LoginView(initialUsername: "raphael")
         .environment(session)
         .preferredColorScheme(.dark)
+}
+
+#Preview("Restore Offline — Light") {
+    let session = AppSession.preview(phase: .signedOut, canRetryRestore: true)
+    session.loginError = RestoreFailure.message(for: .keepAndRetry)
+    return LoginView(initialUsername: "raphael")
+        .environment(session)
+        .preferredColorScheme(.light)
 }
 
 #Preview("Signing In — Light") {

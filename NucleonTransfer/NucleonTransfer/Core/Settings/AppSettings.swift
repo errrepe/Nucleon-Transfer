@@ -44,7 +44,34 @@ enum AppSettings {
     static let suppressTrashConfirmationKey = "suppressTrashConfirmation"
     static let defaultSuppressTrashConfirmation = false
 
+    // MARK: Sign-in (F8.5)
+
+    /// "Keep me signed in" on the login screen (default OFF). On = the next
+    /// successful sign-in stores a remembered session in the Keychain;
+    /// off = nothing is stored and any existing item is deleted.
+    static let keepSignedInKey = "keepSignedIn"
+    static let defaultKeepSignedIn = false
+
+    /// Last username that signed in successfully — prefills the login
+    /// field. Not a secret; kept whatever "Keep me signed in" says.
+    static let lastUsernameKey = "lastUsername"
+
     // MARK: Readers
+
+    static func keepsSignedIn(_ defaults: UserDefaults) -> Bool {
+        bool(defaults, keepSignedInKey, fallback: defaultKeepSignedIn)
+    }
+
+    static func lastUsername(_ defaults: UserDefaults) -> String? {
+        guard let name = defaults.string(forKey: lastUsernameKey), !name.isEmpty else { return nil }
+        return name
+    }
+
+    static func setLastUsername(_ name: String, in defaults: UserDefaults) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        defaults.set(trimmed, forKey: lastUsernameKey)
+    }
 
     static func maxConcurrentUploads(_ defaults: UserDefaults) -> Int {
         clampedConcurrency(defaults, key: maxConcurrentUploadsKey, fallback: defaultMaxConcurrentUploads)
