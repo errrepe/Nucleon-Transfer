@@ -657,7 +657,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não Foi Possível Carregar a Pasta"
+            "value" : "Não foi possível carregar a pasta"
           }
         }
       }
@@ -667,7 +667,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não Foi Possível Carregar o Drive"
+            "value" : "Não foi possível carregar o Drive"
           }
         }
       }
@@ -839,7 +839,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não Foi Possível Baixar “%@”"
+            "value" : "Não foi possível baixar “%@”"
           }
         }
       }
@@ -850,7 +850,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não Foi Possível Mover para o Lixo"
+            "value" : "Não foi possível mover para o Lixo"
           }
         }
       }
@@ -861,7 +861,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não Foi Possível Enviar “%@”"
+            "value" : "Não foi possível enviar “%@”"
           }
         }
       }
@@ -1664,7 +1664,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nenhum Local no Drive"
+            "value" : "Nenhum local no Drive"
           }
         }
       }
@@ -1674,7 +1674,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nenhuma Foto"
+            "value" : "Nenhuma foto"
           }
         }
       }
@@ -1684,7 +1684,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nenhuma Transferência"
+            "value" : "Nenhuma transferência"
           }
         }
       }
@@ -1696,6 +1696,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nenhuma"
+          }
+        }
+      }
+    },
+    "Not available in Demo Mode. Sign in to create folders." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indisponível no Modo de Demonstração. Inicie sessão para criar pastas."
           }
         }
       }
@@ -2075,7 +2085,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tentar Novamente as com Falha"
+            "value" : "Tentar Novamente as que Falharam"
           }
         }
       }
@@ -2118,7 +2128,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Selecione um Local"
+            "value" : "Selecione um local"
           }
         }
       }
@@ -2481,7 +2491,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta Pasta Está Vazia"
+            "value" : "Esta pasta está vazia"
           }
         }
       }
@@ -2720,7 +2730,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pasta sem Título"
+            "value" : "Pasta sem título"
           }
         }
       }
@@ -2932,6 +2942,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Aguardando…"
+          }
+        }
+      }
+    },
+    "You can restore it from Trash in Proton Drive on the web." : {
+      "comment" : "Trash confirmation message (one item)",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você pode restaurá-lo do Lixo no Proton Drive na web."
           }
         }
       }

@@ -33,6 +33,9 @@ struct FolderView: View {
     /// Column widths/visibility/order, owned by BrowserContainerView's
     /// @SceneStorage (F8.4-U4) — one value for every folder in the stack.
     @Binding var columnCustomization: TableColumnCustomization<DriveItem>
+    /// The container's filter-field focus (published to the menu bar so
+    /// ⌘⌫ stays delete-to-line-start while typing).
+    var isSearchFocused: FocusState<Bool>.Binding
     /// True while a file drag hovers the table — drives DropOverlay.
     @State private var isTargeted = false
     /// The row under the pointer, written by FolderTable — while a drag
@@ -40,6 +43,9 @@ struct FolderView: View {
     /// F8.3-P3: an observable object, read only inside `HoveredDropOverlay`,
     /// so pointer moves never re-evaluate this body.
     @State private var hover = RowHoverState()
+    /// View ▸ Show Path Bar (⌥⌘P) — drawn per folder view, so pushed
+    /// folders show it too.
+    @AppStorage(BrowserPreferences.showPathBarKey) private var showPathBar = false
 
     /// This folder's store — observed per folder (F8.3-P3).
     private var state: FolderStore { model.state(for: location) }
@@ -47,22 +53,26 @@ struct FolderView: View {
     private var items: [DriveItem] { model.visibleItems(for: location) }
 
     var body: some View {
-        tableWithUploadDrop
-            .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    if model.root.kind == .photos {
-                        PhotosReadOnlyBanner()
-                    }
-                    if model.showsUploadsBlockedBanner {
-                        UploadsBlockedBanner { model.dismissUploadsBlockedBanner() }
-                    }
-                    if case .failed(let message) = state.phase, !state.items.isEmpty {
-                        RefreshFailedBanner(message: message) {
-                            Task { await model.load(location, force: true) }
-                        }
-                    }
-                }
+        // Banners and the path bar are stacked around the table, not set
+        // as safe-area insets on it: an inset that appears and goes away
+        // (the uploads-blocked banner after a drop, then dismissed) shifts
+        // the table's NSScrollView, and its scroll offset stayed displaced
+        // under the toolbar with no way to scroll back (live check).
+        VStack(spacing: 0) {
+            banners
+            tableWithUploadDrop
+            if showPathBar {
+                PathBar(model: model, location: location)
             }
+        }
+            // The topmost FolderView owns the toolbar, so the filter field
+            // is declared here (a stack-level .searchable never showed).
+            .searchable(
+                text: $model.filterText,
+                placement: .toolbar,
+                prompt: "Filter this folder"
+            )
+            .searchFocused(isSearchFocused)
             .navigationTitle(location.name)
             .navigationSubtitle(subtitle)
             // The stack's own back chevron is replaced by the Finder-style
@@ -140,6 +150,22 @@ struct FolderView: View {
             }
     }
 
+    /// Read-only (Photos), uploads-blocked and refresh-failed banners.
+    @ViewBuilder
+    private var banners: some View {
+        if model.root.kind == .photos {
+            PhotosReadOnlyBanner()
+        }
+        if model.showsUploadsBlockedBanner {
+            UploadsBlockedBanner { model.dismissUploadsBlockedBanner() }
+        }
+        if case .failed(let message) = state.phase, !state.items.isEmpty {
+            RefreshFailedBanner(message: message) {
+                Task { await model.load(location, force: true) }
+            }
+        }
+    }
+
     /// The listing with the S3.1 drop-to-upload wiring. On read-only
     /// roots (Photos) the modifier is omitted entirely: no highlight and
     /// the drop is refused — there is nothing to accept it onto.
@@ -152,7 +178,7 @@ struct FolderView: View {
     @ViewBuilder
     private var tableWithUploadDrop: some View {
         let table = FolderTable(
-            items: items, model: model, hover: hover,
+            items: items, location: location, model: model, hover: hover,
             columnCustomization: $columnCustomization
         )
             .overlay { stateOverlay }
@@ -162,10 +188,10 @@ struct FolderView: View {
                 }
             }
         if model.root.allowsWrites {
-            // F8.4-U1: while uploads are blocked the drop accepts no
-            // types (no highlight, refused) — same view structure, so the
-            // table keeps its selection and scroll position.
-            table.onDrop(of: model.uploadsBlocked ? [] : [.fileURL], isTargeted: $isTargeted) { providers in
+            // F8.4-U1: drops stay accepted while uploads are blocked — a
+            // refused drag gave no feedback; BrowserModel.upload brings
+            // the banner back instead.
+            table.onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
                 Task {
                     let urls = await UploadCoordinator.droppedFileURLs(providers)
                     await model.upload(urls: urls, to: location)

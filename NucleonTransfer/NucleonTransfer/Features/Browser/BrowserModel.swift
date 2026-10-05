@@ -99,6 +99,12 @@ final class BrowserModel {
     var pendingTrash: Set<DriveItem.ID> = []
     /// Message for the action-failure alert (trash/create); nil = hidden.
     var actionError: String?
+    /// A sheet, dialog or alert of this browser is on screen. Menu-bar
+    /// commands step aside meanwhile — otherwise their requests queued up
+    /// behind the modal and opened one after another once it closed.
+    var isPresentingModal: Bool {
+        showingNewFolder || confirmingTrash || actionError != nil
+    }
     /// Mirrors the activity store's remote-changed token so views can key
     /// `.task(id:)` on it without touching AppSession (tracking flows
     /// through @Observable property access).
@@ -112,6 +118,7 @@ final class BrowserModel {
     var uploadsBlocked: Bool {
         #if DEBUG
         if let previewUploadsBlocked { return previewUploadsBlocked }
+        if DebugOverrides.shared.uploadsBlocked { return true }
         #endif
         return session.uploads?.uploadsBlocked ?? false
     }
@@ -134,6 +141,14 @@ final class BrowserModel {
         if previewUploadsBlocked != nil { previewBannerDismissed = true; return }
         #endif
         session.uploads?.uploadsBlockedBannerDismissed = true
+    }
+
+    /// An upload attempt while blocked — the banner explains why.
+    private func reshowUploadsBlockedBanner() {
+        #if DEBUG
+        if previewUploadsBlocked != nil { previewBannerDismissed = false; return }
+        #endif
+        session.uploads?.uploadsBlockedBannerDismissed = false
     }
 
     /// The session this browser belongs to — also re-injected into the
@@ -403,6 +418,13 @@ final class BrowserModel {
     /// root › row. Guards read-only roots so a stray drop on Photos
     /// never reaches the queue.
     func upload(urls: [URL], to destination: DriveLocation) async {
+        // A drop while Proton blocks uploads is still accepted (a refused
+        // drag gave no feedback at all — live check): it brings the
+        // dismissed banner back so the reason is on screen.
+        if root.allowsWrites, uploadsBlocked {
+            reshowUploadsBlockedBanner()
+            return
+        }
         guard canUpload, !urls.isEmpty, let uploads = session.uploads else { return }
         let breadcrumb = ancestors(of: destination).map(\.name).joined(separator: " › ")
         await uploads.upload(urls: urls, to: destination, breadcrumb: breadcrumb)
@@ -421,6 +443,10 @@ final class BrowserModel {
     /// extra forced load is a belt-and-braces refresh, `load` dedupes.)
     func createFolder(named name: String) async throws {
         guard let ops = session.folderOps else {
+            #if DEBUG
+            // Demo Mode (DEBUG-only) has no account to write to.
+            if session.isDemo { throw FolderOperationError.demoMode }
+            #endif
             throw FolderOperationError.sessionNotReady
         }
         let linkID = try await ops.createFolder(name: name, in: current)

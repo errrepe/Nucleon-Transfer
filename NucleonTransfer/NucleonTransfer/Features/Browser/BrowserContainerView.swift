@@ -1,6 +1,8 @@
 // Nucleon Transfer — per-root browser container (F7 S2.2, R2 for B1).
 // One NavigationStack per root: the path is BrowserModel.path
-// (DriveLocation values) and the filter field lives in the toolbar.
+// (DriveLocation values). The toolbar filter field is declared by each
+// FolderView (the topmost one owns the toolbar — a stack-level
+// .searchable never showed).
 // FolderView/FolderTable receive the model by PARAMETER — destination
 // and toolbar content are hosted outside the normal subtree, where an
 // environment object injected around the stack can be missing (crash
@@ -12,7 +14,8 @@
 // alert are presented ONCE here (bound to `model.current`) instead of by
 // every FolderView in the stack; the filter field's focus is published
 // to the menu bar (⌘⌫ must stay delete-to-line-start while typing); the
-// optional path bar sits in the bottom safe-area inset.
+// optional path bar lives in each FolderView (a stack-level inset was
+// covered by every pushed folder — it showed on the root only).
 // F8.4-U4: per-window state survives relaunch — the open folder chain
 // (@SceneStorage, link IDs only, re-walked best-effort after the roots
 // load) and the table's column widths/visibility/order; the sort order is
@@ -26,8 +29,6 @@ struct BrowserContainerView: View {
     @State private var model: BrowserModel
     /// The toolbar filter field has keyboard focus (F8.4-U3).
     @FocusState private var isSearchFocused: Bool
-    /// View ▸ Show Path Bar (⌥⌘P).
-    @AppStorage(BrowserPreferences.showPathBarKey) private var showPathBar = false
     /// Last sort column + direction (BrowserSortPreference raw value).
     @AppStorage(BrowserPreferences.sortOrderKey) private var savedSort = BrowserSortPreference.default.rawValue
     /// Share ID + folder link IDs of the open folder (FolderPathRestoration).
@@ -50,29 +51,20 @@ struct BrowserContainerView: View {
     var body: some View {
         @Bindable var model = model
         NavigationStack(path: $model.path) {
-            FolderView(location: model.rootLocation, model: model, columnCustomization: $columnCustomization)
+            FolderView(location: model.rootLocation, model: model, columnCustomization: $columnCustomization,
+                       isSearchFocused: $isSearchFocused)
                 // Safety net on the stack root (R2/B1): any future child
                 // that still reads the environment sees the objects.
                 .environment(model)
                 .environment(model.session)
                 .navigationDestination(for: DriveLocation.self) { location in
-                    FolderView(location: location, model: model, columnCustomization: $columnCustomization)
+                    FolderView(location: location, model: model, columnCustomization: $columnCustomization,
+                           isSearchFocused: $isSearchFocused)
                         // Same net inside the destination closure — this
                         // content is hosted off-hierarchy by the stack.
                         .environment(model)
                         .environment(model.session)
                 }
-        }
-        .searchable(
-            text: $model.filterText,
-            placement: .toolbar,
-            prompt: "Filter this folder"
-        )
-        .searchFocused($isSearchFocused)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if showPathBar {
-                PathBar(model: model)
-            }
         }
         .sheet(isPresented: $model.showingNewFolder) {
             NewFolderSheet(
@@ -102,7 +94,11 @@ struct BrowserContainerView: View {
                 model.cancelTrash()
             }
         } message: {
-            Text("You can restore them from Trash in Proton Drive on the web.")
+            if model.pendingTrash.count == 1 {
+                Text("You can restore it from Trash in Proton Drive on the web.")
+            } else {
+                Text("You can restore them from Trash in Proton Drive on the web.")
+            }
         }
         .dialogSuppressionToggle(isSuppressed: $suppressTrashConfirmation)
         .alert(

@@ -1,15 +1,15 @@
 // Nucleon Transfer — toolbar entry to the transfers popover (F7 S3.2).
 // Lives in the FolderView toolbar (.primaryAction, trailing). The badge
-// counts in-flight transfers; the popover binds to
+// counts failed transfers; the popover binds to
 // `TransferActivityStore.presentTransfers`, which UploadCoordinator also
 // flips on intake so the panel opens on the first upload.
-// Badge note: `.badge(_:)` compiles on macOS but only renders inside
-// TabView/list rows — it is a no-op on an NSToolbarItem-backed button —
-// so the count rides on a small capsule overlay instead.
-// F8.4-U6: the capsule is accent-tinted for in-flight transfers and turns
-// red (with an exclamation glyph) only when something failed and nothing
-// runs any more; while transfers run, a failure adds a small red
-// exclamation dot to the tinted count (F8.4 review). Upload speed
+// Badge note: on macOS 26 `.badge(_:)` on the toolbar button maps to the
+// native NSToolbarItem badge (NSItemBadge: count / text / indicator only,
+// system size and color), drawn OUTSIDE the glass capsule. Per the HIG a
+// badge counts what needs attention, so it shows only the FAILED count;
+// work in flight pulses the icon instead (Safari's downloads button shows
+// progress on the icon, not a badge). Tooltip + VoiceOver carry both
+// counts (F8.4-U6 — never color or motion alone). Upload speed
 // samples come from UploadCoordinator's snapshot listener (F8.4-U7b), not
 // from this view.
 import AppKit
@@ -31,9 +31,14 @@ struct TransfersToolbarButton: View {
 
     var body: some View {
         @Bindable var activity = session.activity
-        Button("Transfers", systemImage: "arrow.up.arrow.down") {
+        Button {
             activity.presentTransfers.toggle()
+        } label: {
+            Label("Transfers", systemImage: "arrow.up.arrow.down")
+                .symbolEffect(.pulse, options: .repeating, isActive: isInFlight)
         }
+        // 0 hides the badge.
+        .badge(failedCount)
         // M4: match the View-menu wording ("Show Transfers") and say
         // what the button does; the active/failed count rides along. The
         // AX label keeps the shorter "Transfers" form.
@@ -45,7 +50,6 @@ struct TransfersToolbarButton: View {
             badgeState.summary.map { String(localized: "Transfers, \($0)") }
                 ?? String(localized: "Transfers")
         )
-        .overlay(alignment: .topTrailing) { badge }
         .popover(isPresented: $activity.presentTransfers, arrowEdge: .bottom) {
             // TransfersPanel takes pure inputs today; the injection is a
             // safety net for any future panel child that reads the
@@ -55,58 +59,19 @@ struct TransfersToolbarButton: View {
         }
     }
 
-    /// Count capsule: accent tint while transfers run (a red "!" dot on
-    /// its leading edge when some also failed), red + "!" glyph when only
-    /// failures remain (state never conveyed by color alone).
-    /// `monospacedDigit` keeps the capsule width stable while the count
-    /// changes. Hidden from VoiceOver — the button label carries it.
-    @ViewBuilder
-    private var badge: some View {
+    /// Failed transfers — the only state that needs the user (badge).
+    private var failedCount: Int {
         switch badgeState {
-        case .none:
-            EmptyView()
-        case let .active(count, failed):
-            capsule(fill: AnyShapeStyle(.tint)) {
-                Text(count, format: .number)
-            }
-            .overlay(alignment: .topLeading) {
-                if failed > 0 { failedMarker }
-            }
-        case let .failed(count):
-            capsule(fill: AnyShapeStyle(.red)) {
-                HStack(spacing: 1) {
-                    Image(systemName: "exclamationmark")
-                        .fontWeight(.bold)
-                    Text(count, format: .number)
-                }
-            }
+        case .none: 0
+        case let .active(_, failed): failed
+        case let .failed(count): count
         }
     }
 
-    /// Small red "!" dot riding on the active capsule (failures exist
-    /// while other transfers still run).
-    private var failedMarker: some View {
-        Image(systemName: "exclamationmark")
-            .font(.system(size: 6, weight: .black))
-            .foregroundStyle(.white)
-            .frame(width: 9, height: 9)
-            .background(.red, in: Circle())
-            .offset(x: 1, y: -7)
-            .accessibilityHidden(true)
-    }
-
-    private func capsule<Content: View>(
-        fill: AnyShapeStyle, @ViewBuilder content: () -> Content
-    ) -> some View {
-        content()
-            .font(.caption2)
-            .monospacedDigit()
-            .foregroundStyle(.white)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(fill, in: Capsule())
-            .offset(x: 6, y: -4)
-            .accessibilityHidden(true)
+    /// Something is uploading or downloading — the icon pulses.
+    private var isInFlight: Bool {
+        if case .active = badgeState { return true }
+        return false
     }
 
     private var panel: TransfersPanel {
