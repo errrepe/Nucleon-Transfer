@@ -222,6 +222,37 @@ struct SRPModulusTests {
         }
     }
 
+    /// End-to-end with the real RNG (feasible in debug since F8.3-P5's
+    /// Montgomery modPow): plays the server side of SRP-6a on the real
+    /// modulus and checks both proofs agree. Server: v = g^x, B = k*v + g^b,
+    /// S = (A * v^u)^b; client derives the same S = (B - k*g^x)^(a + u*x).
+    @Test func generateProofsWithRealRandomMatchesServer() throws {
+        let (nData, _) = try realInputs()
+        let n = BigUInt(dataLE: nData)
+        let byteLength = SRPClient.byteLength
+        let hashedPassword = try SecureRandom.bytes(byteLength)
+        let x = BigUInt(dataLE: hashedPassword)
+        let k = try SRPClient.multiplier(modulus: n)
+        let v = BigUInt.modPow(.two, x, n)
+        let serverSecret = BigUInt(dataLE: try SecureRandom.bytes(byteLength))
+        let bigB = BigUInt.mod(BigUInt.add(BigUInt.modMul(k, v, n),
+                                           BigUInt.modPow(.two, serverSecret, n)), n)
+        let bData = bigB.toDataLE(length: byteLength)
+
+        let proofs = try SRPClient.generateProofs(
+            hashedPassword: hashedPassword, serverEphemeral: bData, modulus: nData)
+
+        let aData = proofs.clientEphemeral
+        let a = BigUInt(dataLE: aData)
+        #expect(a.compare(.one) > 0 && a.compare(n) < 0)
+        let u = BigUInt(dataLE: ExpandHash.expand(aData + bData).prefix(byteLength))
+        let shared = BigUInt.modPow(BigUInt.modMul(a, BigUInt.modPow(v, u, n), n), serverSecret, n)
+        let sData = shared.toDataLE(length: byteLength)
+        let clientProof = ExpandHash.expand(aData + bData + sData)
+        #expect(proofs.clientProof == clientProof)
+        #expect(proofs.expectedServerProof == ExpandHash.expand(aData + clientProof + sData))
+    }
+
     @Test func secureRandomReturnsFreshBytes() throws {
         let a = try SecureRandom.bytes(32), c = try SecureRandom.bytes(32)
         #expect(a.count == 32 && c.count == 32 && a != c)
