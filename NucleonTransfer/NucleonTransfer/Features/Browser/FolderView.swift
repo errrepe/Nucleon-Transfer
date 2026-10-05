@@ -86,7 +86,7 @@ struct FolderView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Move to Trash", systemImage: "trash") {
-                        model.confirmingTrash = true
+                        model.requestTrash(model.selection)
                     }
                     .help("Move to Trash")
                     .disabled(model.selection.isEmpty || !model.root.allowsWrites)
@@ -115,16 +115,20 @@ struct FolderView: View {
                     try await model.createFolder(named: name)
                 }
             }
+            // F8.2-R8: counts and trashes `pendingTrash` (the clicked rows
+            // or the selection, whichever opened the dialog) — never the
+            // live selection, which a context-menu click doesn't move.
             .confirmationDialog(
-                "Move ^[\(model.selection.count) item](inflect: true) to Trash?",
+                "Move ^[\(model.pendingTrash.count) item](inflect: true) to Trash?",
                 isPresented: $model.confirmingTrash,
                 titleVisibility: .visible
             ) {
                 Button("Move to Trash", role: .destructive) {
-                    let ids = model.selection
-                    Task { await model.trashItems(ids) }
+                    model.confirmTrash()
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Cancel", role: .cancel) {
+                    model.cancelTrash()
+                }
             } message: {
                 Text("You can restore them from Trash in Proton Drive on the web.")
             }

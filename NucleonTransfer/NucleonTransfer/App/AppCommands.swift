@@ -96,7 +96,8 @@ struct AppCommands: Commands {
         // with Finder's Add to Sidebar/bookmark conventions.
         CommandGroup(after: .pasteboard) {
             Button("Move to Trash") {
-                browser?.confirmingTrash = true
+                guard let browser else { return }
+                browser.requestTrash(browser.selection)
             }
             .keyboardShortcut(.delete, modifiers: [.command])
             .disabled(!canTrash)

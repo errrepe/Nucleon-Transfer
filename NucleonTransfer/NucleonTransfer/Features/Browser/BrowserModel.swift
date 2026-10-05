@@ -47,7 +47,14 @@ final class BrowserModel {
     /// Drives the New Folder sheet (toolbar + empty-area context menu).
     var showingNewFolder = false
     /// Drives the "Move to Trash" confirmationDialog (toolbar + menu).
+    /// Set through `requestTrash(_:)` so `pendingTrash` is always filled.
     var confirmingTrash = false
+    /// The items the open trash confirmation will act on (F8.2-R8). The
+    /// context menu passes the CLICKED rows — right-clicking an unselected
+    /// row doesn't move the selection on macOS — while the toolbar and ⌘⌫
+    /// pass the selection. The dialog counts and trashes exactly this set;
+    /// cleared on confirm/cancel.
+    var pendingTrash: Set<DriveItem.ID> = []
     /// Message for the action-failure alert (trash/create); nil = hidden.
     var actionError: String?
     /// Mirrors the activity store's remote-changed token so views can key
@@ -252,6 +259,26 @@ final class BrowserModel {
         let linkID = try await ops.createFolder(name: name, in: current)
         await load(current, force: true)
         selection = [linkID]
+    }
+
+    /// Opens the trash confirmation for `ids` (F8.2-R8). No-op on an empty
+    /// set or a read-only root.
+    func requestTrash(_ ids: Set<DriveItem.ID>) {
+        guard !ids.isEmpty, root.allowsWrites else { return }
+        pendingTrash = ids
+        confirmingTrash = true
+    }
+
+    /// The dialog's destructive button: trashes `pendingTrash` and clears it.
+    func confirmTrash() {
+        let ids = pendingTrash
+        pendingTrash = []
+        Task { await trashItems(ids) }
+    }
+
+    /// The dialog's cancel path (button, Esc, click-away).
+    func cancelTrash() {
+        pendingTrash = []
     }
 
     /// Optimistic trash (S2.3/6.3): rows leave the cache immediately, then
