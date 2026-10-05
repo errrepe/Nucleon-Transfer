@@ -3,13 +3,12 @@
 // counts in-flight transfers; the popover binds to
 // `TransferActivityStore.presentTransfers`, which UploadCoordinator also
 // flips on intake so the panel opens on the first upload.
-// Badge note: `.badge(_:)` compiles on macOS but only renders inside
-// TabView/list rows — it is a no-op on an NSToolbarItem-backed button —
-// so the count rides on a small capsule overlay instead.
-// F8.4-U6: the capsule is accent-tinted for in-flight transfers and turns
-// red (with an exclamation glyph) only when something failed and nothing
-// runs any more; while transfers run, a failure adds a small red
-// exclamation dot to the tinted count (F8.4 review). Upload speed
+// Badge note: on macOS 26 `.badge(_:)` on the toolbar button maps to the
+// native NSToolbarItem badge, drawn by the system OUTSIDE the glass
+// capsule (live check — hand-drawn overlays were clipped to the item or
+// covered the icon). The native badge is always red, so state rides in
+// the text: "3" in flight, "3!" in flight with failures, "!3" only
+// failures left (F8.4-U6 — never color alone). Upload speed
 // samples come from UploadCoordinator's snapshot listener (F8.4-U7b), not
 // from this view.
 import AppKit
@@ -34,19 +33,9 @@ struct TransfersToolbarButton: View {
         Button {
             activity.presentTransfers.toggle()
         } label: {
-            // The toolbar clips the item to its label's bounds: a badge
-            // offset past the icon was cut in half, and one inside the
-            // icon's corner covered the arrows (live checks). The badge
-            // sits NEXT to the icon instead — the item widens while it shows.
-            Label {
-                Text("Transfers")
-            } icon: {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.up.arrow.down")
-                    badge
-                }
-            }
+            Label("Transfers", systemImage: "arrow.up.arrow.down")
         }
+        .badge(badgeText)
         // M4: match the View-menu wording ("Show Transfers") and say
         // what the button does; the active/failed count rides along. The
         // AX label keeps the shorter "Transfers" form.
@@ -67,57 +56,16 @@ struct TransfersToolbarButton: View {
         }
     }
 
-    /// Count capsule: accent tint while transfers run (a red "!" dot on
-    /// its leading edge when some also failed), red + "!" glyph when only
-    /// failures remain (state never conveyed by color alone).
-    /// `monospacedDigit` keeps the capsule width stable while the count
-    /// changes. Hidden from VoiceOver — the button label carries it.
-    @ViewBuilder
-    private var badge: some View {
+    /// Native toolbar badge text; nil hides it. Digits are localized.
+    private var badgeText: Text? {
         switch badgeState {
         case .none:
-            EmptyView()
+            nil
         case let .active(count, failed):
-            capsule(fill: AnyShapeStyle(.tint)) {
-                Text(count, format: .number)
-            }
-            .overlay(alignment: .leading) {
-                if failed > 0 { failedMarker }
-            }
+            Text(verbatim: failed > 0 ? "\(count.formatted())!" : count.formatted())
         case let .failed(count):
-            capsule(fill: AnyShapeStyle(.red)) {
-                HStack(spacing: 1) {
-                    Image(systemName: "exclamationmark")
-                        .fontWeight(.bold)
-                    Text(count, format: .number)
-                }
-            }
+            Text(verbatim: "!\(count.formatted())")
         }
-    }
-
-    /// Small red "!" dot riding on the active capsule (failures exist
-    /// while other transfers still run).
-    private var failedMarker: some View {
-        Image(systemName: "exclamationmark")
-            .font(.system(size: 6, weight: .black))
-            .foregroundStyle(.white)
-            .frame(width: 9, height: 9)
-            .background(.red, in: Circle())
-            .offset(x: -4)
-            .accessibilityHidden(true)
-    }
-
-    private func capsule<Content: View>(
-        fill: AnyShapeStyle, @ViewBuilder content: () -> Content
-    ) -> some View {
-        content()
-            .font(.caption2)
-            .monospacedDigit()
-            .foregroundStyle(.white)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(fill, in: Capsule())
-            .accessibilityHidden(true)
     }
 
     private var panel: TransfersPanel {
