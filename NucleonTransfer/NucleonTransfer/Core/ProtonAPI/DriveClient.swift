@@ -9,7 +9,9 @@ import Foundation
 actor DriveClient {
     private let api: APIClient
     private let sessions: SessionManager
-    private let pageSize = 100
+    /// Children page size — go-proton-api's `maxPageSize` (paging.go,
+    /// const maxPageSize = 150), which its ListChildren sends as PageSize.
+    private let pageSize = 150
 
     init(api: APIClient = APIClient(), sessions: SessionManager) {
         self.api = api
@@ -44,27 +46,43 @@ actor DriveClient {
         }
     }
 
-    /// All children across pages (stops on first empty page, like go ListChildren).
+    /// All children across pages. F8.3-P3: stops on the first SHORT page
+    /// (`count < pageSize`) instead of fetching a trailing empty page — a
+    /// folder under `pageSize` children is now one round trip, not two.
+    /// Upstream go-proton-api ListChildren (link_folder.go) still pages
+    /// until an empty page; "a short page is the last page" is the
+    /// assumption to confirm live (listed as a live check).
     func listChildren(shareID: String, linkID: String, showAll: Bool = false) async throws -> [DriveLink] {
-        var all: [DriveLink] = []
-        var page = 0
-        while true {
-            let current = page
-            let batch: [DriveLink] = try await authed { uid, token in
-                try await api.get(
+        try await Self.collectPages(pageSize: pageSize) { page in
+            try await self.authed { uid, token in
+                try await self.api.get(
                     LinksResponse.self,
                     path: "/drive/shares/\(shareID)/folders/\(linkID)/children",
                     uid: uid,
                     accessToken: token,
                     query: [
-                        "Page": String(current),
-                        "PageSize": String(pageSize),
+                        "Page": String(page),
+                        "PageSize": String(self.pageSize),
                         "ShowAll": showAll ? "1" : "0",
                     ]
                 ).links
             }
-            if batch.isEmpty { break }
+        }
+    }
+
+    /// Page loop shared by paged listings: fetches page 0, 1, … and stops
+    /// after the first page holding fewer than `pageSize` rows (an empty
+    /// page included). Runs on the caller's executor.
+    nonisolated(nonsending) static func collectPages<T>(
+        pageSize: Int,
+        fetch: (Int) async throws -> [T]
+    ) async rethrows -> [T] {
+        var all: [T] = []
+        var page = 0
+        while true {
+            let batch = try await fetch(page)
             all.append(contentsOf: batch)
+            if batch.count < pageSize { break }
             page += 1
         }
         return all

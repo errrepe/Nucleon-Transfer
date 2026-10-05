@@ -23,11 +23,15 @@ struct FolderView: View {
     @Bindable var model: BrowserModel
     /// True while a file drag hovers the table — drives DropOverlay.
     @State private var isTargeted = false
-    /// The row under the pointer, mirrored from FolderTable — while a
-    /// drag hovers a folder row the overlay names THAT destination (B10).
-    @State private var hoveredItem: DriveItem?
+    /// The row under the pointer, written by FolderTable — while a drag
+    /// hovers a folder row the overlay names THAT destination (B10).
+    /// F8.3-P3: an observable object, read only inside `HoveredDropOverlay`,
+    /// so pointer moves never re-evaluate this body.
+    @State private var hover = RowHoverState()
 
-    private var state: BrowserModel.FolderState { model.state(for: location) }
+    /// This folder's store — observed per folder (F8.3-P3).
+    private var state: FolderStore { model.state(for: location) }
+    /// Memoized: recomputed only when the rows, sort or filter change.
     private var items: [DriveItem] { model.visibleItems(for: location) }
 
     var body: some View {
@@ -164,12 +168,11 @@ struct FolderView: View {
     /// navigating while the providers resolve can't retarget the upload.
     @ViewBuilder
     private var tableWithUploadDrop: some View {
-        let table = FolderTable(items: items, model: model, hoveredItem: $hoveredItem)
+        let table = FolderTable(items: items, model: model, hover: hover)
             .overlay { stateOverlay }
             .overlay {
                 if isTargeted {
-                    DropOverlay(location: DropTargeting.destination(
-                        for: hoveredItem, fallback: location))
+                    HoveredDropOverlay(hover: hover, fallback: location)
                 }
             }
         if model.root.allowsWrites {
@@ -234,5 +237,17 @@ struct FolderView: View {
 
     private var isFiltering: Bool {
         !model.filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+/// The drop overlay bound to the hovered row (B10). Its own view so the
+/// `hover.item` read — which changes on every row crossed — invalidates
+/// only this overlay, and only while a drag is targeted.
+private struct HoveredDropOverlay: View {
+    let hover: RowHoverState
+    let fallback: DriveLocation
+
+    var body: some View {
+        DropOverlay(location: DropTargeting.destination(for: hover.item, fallback: fallback))
     }
 }
