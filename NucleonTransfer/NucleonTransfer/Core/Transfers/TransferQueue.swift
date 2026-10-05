@@ -1,4 +1,4 @@
-// Nucleon Transfer — upload queue core (F4.4).
+// Nucleon Transfer — upload queue core (F4.4; F8.3-P4 parallel tree folders).
 // Offline-testable: Foundation only (no SwiftUI/SwiftData/DriveClient here).
 // Live wiring lives in DriveUploadAdapter.swift; UI in Features/Transfers/.
 //
@@ -572,6 +572,14 @@ actor TransferQueue {
     /// the entry with relativePath "" (the scan root itself) is never
     /// created — callers that want the dropped folder preserved pass
     /// entries rooted at its name (`LocalTreeScan.rooted`, F8.2-R6).
+    ///
+    /// F8.3-P4: folders are created level by level (all depth-1, then
+    /// depth-2, …) and in parallel within a level, at most
+    /// `folderConcurrency` at once — every parent exists before its level
+    /// starts. The path→LinkID map is a local built once per level from the
+    /// collected results, so actor state is only touched by the final
+    /// `enqueueMany`. Any failure aborts the whole enqueue (nothing is
+    /// queued), like the sequential loop did.
     /// - Returns: enqueued job IDs, in file-entry order.
     @discardableResult
     func enqueueTree(
@@ -579,29 +587,13 @@ actor TransferQueue {
         shareID: String,
         rootParentLinkID: String,
         folders: any RemoteFolderCreator,
-        maxAttempts: Int = 5
+        maxAttempts: Int = 5,
+        folderConcurrency: Int = 4
     ) async throws -> [UUID] {
-        var remoteByRelPath = ["": rootParentLinkID]
-        func depth(_ rel: String) -> Int {
-            rel.isEmpty ? 0 : rel.utf8.reduce(1) { $1 == UInt8(ascii: "/") ? $0 + 1 : $0 }
-        }
-        let dirs = entries.filter(\.isDirectory)
-            .map { (depth: depth($0.relativePath), entry: $0) }
-            .sorted {
-                if $0.depth != $1.depth { return $0.depth < $1.depth }
-                return $0.entry.relativePath < $1.entry.relativePath
-            }
-            .map(\.entry)
-        for dir in dirs where !dir.relativePath.isEmpty {
-            let rel = dir.relativePath
-            if remoteByRelPath[rel] != nil { continue } // idempotent within a tree
-            let parentRel = (rel as NSString).deletingLastPathComponent
-            let parent = remoteByRelPath[parentRel] ?? rootParentLinkID
-            let name = ((rel as NSString).lastPathComponent as String)
-                .precomposedStringWithCanonicalMapping
-            let linkID = try await folders.ensureFolder(name: name, parentLinkID: parent, shareID: shareID)
-            remoteByRelPath[rel] = linkID
-        }
+        let remoteByRelPath = try await Self.createFolders(
+            entries: entries, shareID: shareID, rootParentLinkID: rootParentLinkID,
+            folders: folders, width: folderConcurrency
+        )
         var batch: [TransferJob] = []
         for file in entries where !file.isDirectory {
             let parentRel = (file.relativePath as NSString).deletingLastPathComponent
@@ -620,6 +612,128 @@ actor TransferQueue {
         }
         enqueueMany(batch)
         return batch.map(\.id)
+    }
+
+    /// One folder to create within a level.
+    private struct FolderRequest: Sendable {
+        var name: String
+        var parentLinkID: String
+    }
+
+    /// Creates the tree's folders level by level (F8.3-P4) and returns the
+    /// relative path → LinkID map ("" → `rootParentLinkID`). Static and
+    /// nonisolated: it only reads its arguments, so the actor is free while
+    /// folders are created and no actor state can change under it.
+    ///
+    /// Within a level, directories that resolve to the same (parent, NFC
+    /// name) share ONE ensureFolder call — two concurrent creates of one
+    /// name would race the merge policy; sequentially the second merged.
+    /// A directory whose parent is missing from `entries` lands under
+    /// `rootParentLinkID` (unchanged).
+    private nonisolated static func createFolders(
+        entries: [LocalTreeScan.Entry],
+        shareID: String,
+        rootParentLinkID: String,
+        folders: any RemoteFolderCreator,
+        width: Int
+    ) async throws -> [String: String] {
+        var remoteByRelPath = ["": rootParentLinkID]
+        func depth(_ rel: String) -> Int {
+            rel.isEmpty ? 0 : rel.utf8.reduce(1) { $1 == UInt8(ascii: "/") ? $0 + 1 : $0 }
+        }
+        var levels: [Int: [String]] = [:]
+        for dir in entries where dir.isDirectory && !dir.relativePath.isEmpty {
+            levels[depth(dir.relativePath), default: []].append(dir.relativePath)
+        }
+        for level in levels.keys.sorted() {
+            // Unique paths, sorted: request order (and so the error picked
+            // on failure) is deterministic.
+            let rels = Set(levels[level] ?? []).sorted()
+            var requests: [FolderRequest] = []
+            var requestIndex: [String: Int] = [:] // "parent\0name" → requests index
+            var relToRequest: [(rel: String, index: Int)] = []
+            for rel in rels {
+                let parentRel = (rel as NSString).deletingLastPathComponent
+                let parent = remoteByRelPath[parentRel] ?? rootParentLinkID
+                let name = ((rel as NSString).lastPathComponent as String)
+                    .precomposedStringWithCanonicalMapping
+                let key = parent + "\u{0}" + name
+                let index: Int
+                if let existing = requestIndex[key] {
+                    index = existing
+                } else {
+                    index = requests.count
+                    requestIndex[key] = index
+                    requests.append(FolderRequest(name: name, parentLinkID: parent))
+                }
+                relToRequest.append((rel, index))
+            }
+            let linkIDs = try await ensureLevel(
+                requests, shareID: shareID, folders: folders, width: width
+            )
+            for (rel, index) in relToRequest {
+                remoteByRelPath[rel] = linkIDs[index]
+            }
+        }
+        return remoteByRelPath
+    }
+
+    /// Runs one level's ensureFolder calls with at most `width` in flight.
+    /// Returns LinkIDs aligned with `requests`. On failure the remaining
+    /// requests are not started, in-flight ones are cancelled and awaited,
+    /// and the error of the lowest-indexed failed request is thrown
+    /// (cancellations it caused rank last) — deterministic regardless of
+    /// completion order.
+    private nonisolated static func ensureLevel(
+        _ requests: [FolderRequest],
+        shareID: String,
+        folders: any RemoteFolderCreator,
+        width: Int
+    ) async throws -> [String] {
+        var results = [String?](repeating: nil, count: requests.count)
+        var failures: [(index: Int, error: any Error)] = []
+        await withTaskGroup(of: (Int, Result<String, any Error>).self) { group in
+            var next = 0
+            func launch() {
+                let index = next
+                let request = requests[index]
+                next += 1
+                group.addTask {
+                    do {
+                        let id = try await folders.ensureFolder(
+                            name: request.name, parentLinkID: request.parentLinkID, shareID: shareID
+                        )
+                        return (index, .success(id))
+                    } catch {
+                        return (index, .failure(error))
+                    }
+                }
+            }
+            while next < min(max(width, 1), requests.count) { launch() }
+            while let (index, result) = await group.next() {
+                switch result {
+                case let .success(id):
+                    results[index] = id
+                    if failures.isEmpty, next < requests.count { launch() }
+                case let .failure(error):
+                    if failures.isEmpty { group.cancelAll() }
+                    failures.append((index, error))
+                }
+            }
+        }
+        if !failures.isEmpty {
+            let ranked = failures.sorted {
+                let c0 = TransferErrorClassify.isCancellation($0.error)
+                let c1 = TransferErrorClassify.isCancellation($1.error)
+                if c0 != c1 { return !c0 }
+                return $0.index < $1.index
+            }
+            throw ranked[0].error
+        }
+        return try results.map { id in
+            guard let id else { throw CancellationError() }
+            return id
+        }
     }
 
     // MARK: operators

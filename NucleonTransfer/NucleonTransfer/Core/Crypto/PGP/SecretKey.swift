@@ -14,14 +14,19 @@ enum SecretKeyError: Error, Sendable {
 
 /// Multi-precision integer reader (2-octet bit length + big-endian bytes).
 enum MPI {
-    /// Returns (raw bytes, next offset).
+    /// Returns (raw bytes, next offset). `offset` and the returned offset
+    /// are RELATIVE to `data.startIndex`, so slices work; the bytes come
+    /// back as a zero-based copy (MPIs are small). F8.3-P2: the value used
+    /// to be sliced with the relative offset as an absolute index — wrong
+    /// bytes (or a trap) for any slice not starting at 0.
     static func read(_ data: Data, from offset: Int) throws -> (Data, Int) {
-        guard offset + 2 <= data.count else { throw SecretKeyError.truncated }
-        let bitlen = (Int(data[data.startIndex + offset]) << 8) | Int(data[data.startIndex + offset + 1])
+        guard offset >= 0, offset + 2 <= data.count else { throw SecretKeyError.truncated }
+        let base = data.startIndex
+        let bitlen = (Int(data[base + offset]) << 8) | Int(data[base + offset + 1])
         let byteLen = (bitlen + 7) / 8
         let start = offset + 2
         guard start + byteLen <= data.count else { throw SecretKeyError.truncated }
-        return (data[start..<(start + byteLen)], start + byteLen)
+        return (Data(data[(base + start)..<(base + start + byteLen)]), start + byteLen)
     }
 }
 

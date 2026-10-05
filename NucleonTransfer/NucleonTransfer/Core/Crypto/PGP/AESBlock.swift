@@ -1,5 +1,8 @@
-// Nucleon Transfer — AES single-block + OpenPGP CFB (RFC 4880 §13.9).
-// CryptoKit has no ECB/CFB; CommonCrypto CCCrypt provides the raw block op.
+// Nucleon Transfer — AES single-block (key wrap) + CFB-128 stream (RFC 4880 §13.9).
+// CryptoKit has no ECB/CFB; CommonCrypto provides both. OpenPGP CFB without
+// resync (SEIPDv1) is exactly standard CFB-128 with a zero IV over
+// prefix || check || data || MDC, so it runs through one CCCryptor
+// (F8.3-P1: one key schedule per message instead of one CCCrypt per block).
 import CommonCrypto
 import Foundation
 
@@ -74,117 +77,73 @@ enum AESBlock {
         return Data(out)
     }
 
-    /// OpenPGP CFB decrypt with prefix (RFC 4880 §13.9 + go-crypto ocfb.go):
-    /// FR starts at `iv` (zeros when nil, as in SED packets); the first
-    /// blockSize octets are random prefix, the next 2 are check octets
-    /// (copies of the LAST two prefix octets).
-    /// `resync` selects the post-prefix behavior (go-crypto OCFBResyncOption):
-    /// true (SED tag 9) re-encrypts c[2..<BS+2] as the new FR; false
-    /// (SEIPDv1 tag 18, MDC) continues the stream with the check ciphertext
-    /// spliced into FR (no re-encryption).
-    /// Returns full plaintext INCLUDING the prefix (caller strips blockSize+2).
-    static func openPGPcfbDecrypt(ciphertext: Data, key: Data, blockSize: Int = 16, iv: Data? = nil, resync: Bool = true) throws -> Data {
-        guard ciphertext.count >= blockSize + 2 else { throw AESError.badBlockLength }
-        let c = Array(ciphertext)
-        var out: [UInt8] = []
-        out.reserveCapacity(c.count)
+    /// Standard CFB-128 (no OpenPGP prefix/resync) through ONE CommonCrypto
+    /// cryptor: a single key schedule, output written straight into the
+    /// caller's buffer. `CFBStream` keeps the cryptor across `update` calls,
+    /// so non-contiguous input pieces encrypt as one continuous stream.
+    struct CFBStream: ~Copyable {
+        private let cryptor: CCCryptorRef
 
-        var fr = iv.map(Array.init) ?? [UInt8](repeating: 0, count: blockSize)
-        guard fr.count == blockSize else { throw AESError.badBlockLength }
-        var fre = try Array(encrypt(block: Data(fr), key: key))
-        for i in 0..<blockSize {
-            out.append(c[i] ^ fre[i])
-        }
-        fr = Array(c[0..<blockSize])
-        fre = try Array(encrypt(block: Data(fr), key: key))
-        out.append(c[blockSize] ^ fre[0])
-        out.append(c[blockSize + 1] ^ fre[1])
-        guard out[blockSize] == out[blockSize - 2], out[blockSize + 1] == out[blockSize - 1] else {
-            throw AESError.checkBytesMismatch
-        }
-        if resync {
-            fr = Array(c[2..<(blockSize + 2)])
-            var pos = blockSize + 2
-            while pos < c.count {
-                fre = try Array(encrypt(block: Data(fr), key: key))
-                let end = min(pos + blockSize, c.count)
-                for i in pos..<end {
-                    out.append(c[i] ^ fre[i - pos])
-                }
-                if end - pos == blockSize {
-                    fr = Array(c[pos..<end])
-                }
-                pos = end
+        /// `iv` must be 16 bytes; nil means the all-zero IV (OpenPGP SED).
+        init(_ op: CCOperation, key: Data, iv: Data? = nil) throws {
+            switch key.count {
+            case kCCKeySizeAES128, kCCKeySizeAES192, kCCKeySizeAES256: break
+            default: throw AESError.badKeyLength
             }
-        } else {
-            // No resync (SEIPDv1): splice check ciphertext into FR, continue.
-            fre[0] = c[blockSize]
-            fre[1] = c[blockSize + 1]
-            var used = 2
-            var pos = blockSize + 2
-            while pos < c.count {
-                if used == fre.count {
-                    fre = try Array(encrypt(block: Data(fre), key: key))
-                    used = 0
-                }
-                out.append(c[pos] ^ fre[used])
-                fre[used] = c[pos]
-                used += 1
-                pos += 1
+            var ivBytes = [UInt8](repeating: 0, count: kCCBlockSizeAES128)
+            if let iv {
+                guard iv.count == kCCBlockSizeAES128 else { throw AESError.badBlockLength }
+                ivBytes = Array(iv)
             }
+            var ref: CCCryptorRef?
+            let status = key.withUnsafeBytes { kptr in
+                CCCryptorCreateWithMode(
+                    op, CCMode(kCCModeCFB), CCAlgorithm(kCCAlgorithmAES), CCPadding(ccNoPadding),
+                    ivBytes, kptr.baseAddress, key.count,
+                    nil, 0, 0, CCModeOptions(0), &ref
+                )
+            }
+            guard status == kCCSuccess, let ref else { throw AESError.cryptorFailed(status) }
+            cryptor = ref
         }
-        return Data(out)
+
+        deinit { CCCryptorRelease(cryptor) }
+
+        /// Transforms `input` into `output` (same length; CFB is a stream
+        /// mode, so any length works and the keystream position carries
+        /// over to the next call).
+        func update(_ input: UnsafeRawBufferPointer, into output: UnsafeMutableRawBufferPointer) throws {
+            guard input.count <= output.count else { throw AESError.badBlockLength }
+            guard let src = input.baseAddress, let dst = output.baseAddress else { return }
+            var moved = 0
+            let status = CCCryptorUpdate(cryptor, src, input.count, dst, output.count, &moved)
+            guard status == kCCSuccess, moved == input.count else { throw AESError.cryptorFailed(status) }
+        }
+    }
+
+    /// One-shot CFB-128 over `input` into a fresh buffer of the same size.
+    static func cfb(_ op: CCOperation, _ input: Data, key: Data, iv: Data?) throws -> Data {
+        let stream = try CFBStream(op, key: key, iv: iv)
+        var out = Data(count: input.count)
+        try input.withUnsafeBytes { src in
+            try out.withUnsafeMutableBytes { dst in try stream.update(src, into: dst) }
+        }
+        return out
     }
 
     /// Plain CFB decrypt (NO prefix/resync): FR starts at `iv`, standard CFB.
     /// Proton secret keys encrypt MPI+checksum this way (empirically: secretData
     /// is exactly MPI + SHA-1 with no random prefix on current key packets).
-    static func cfbDecrypt(ciphertext: Data, key: Data, iv: Data, blockSize: Int = 16) throws -> Data {
-        guard iv.count == blockSize else { throw AESError.badBlockLength }
-        let c = Array(ciphertext)
-        var fr = Array(iv)
-        var out: [UInt8] = []
-        out.reserveCapacity(c.count)
-        var pos = 0
-        while pos < c.count {
-            let fre = try Array(encrypt(block: Data(fr), key: key))
-            let end = min(pos + blockSize, c.count)
-            for i in pos..<end {
-                out.append(c[i] ^ fre[i - pos])
-            }
-            if end - pos == blockSize {
-                fr = Array(c[pos..<end])
-            } else {
-                break // trailing partial block has no next FR; done
-            }
-            pos = end
-        }
-        return Data(out)
+    static func cfbDecrypt(ciphertext: Data, key: Data, iv: Data) throws -> Data {
+        guard iv.count == kCCBlockSizeAES128 else { throw AESError.badBlockLength }
+        return try cfb(CCOperation(kCCDecrypt), ciphertext, key: key, iv: iv)
     }
 
     /// Plain CFB encrypt (NO prefix/resync): FR starts at `iv`, standard CFB.
     /// Exact inverse of cfbDecrypt (used to lock generated secret keys).
-    static func cfbEncrypt(plaintext: Data, key: Data, iv: Data, blockSize: Int = 16) throws -> Data {
-        guard iv.count == blockSize else { throw AESError.badBlockLength }
-        let p = Array(plaintext)
-        var fr = Array(iv)
-        var out: [UInt8] = []
-        out.reserveCapacity(p.count)
-        var pos = 0
-        while pos < p.count {
-            let fre = try Array(encrypt(block: Data(fr), key: key))
-            let end = min(pos + blockSize, p.count)
-            for i in pos..<end {
-                out.append(p[i] ^ fre[i - pos])
-            }
-            if end - pos == blockSize {
-                fr = Array(out[pos..<end])
-            } else {
-                break // trailing partial block has no next FR; done
-            }
-            pos = end
-        }
-        return Data(out)
+    static func cfbEncrypt(plaintext: Data, key: Data, iv: Data) throws -> Data {
+        guard iv.count == kCCBlockSizeAES128 else { throw AESError.badBlockLength }
+        return try cfb(CCOperation(kCCEncrypt), plaintext, key: key, iv: iv)
     }
 }
 

@@ -51,6 +51,20 @@
   `additional_arguments: ["-NTDemoMode","YES"]`. The sidebar footer shows a
   "Demo Mode" capsule; Sign Out returns to the normal login screen.
 
+### Benchmarks
+
+- `Benchmarks/` is a separate SwiftPM package (not part of `swift test`):
+  `Sources/NucleonCore` is a symlink to `NucleonTransfer/NucleonTransfer/Core`,
+  compiled with `-enable-testing` so `nucleon-bench` reaches internal API.
+- Run in release (debug numbers are meaningless):
+  `swift run -c release --package-path Benchmarks nucleon-bench [filter]`
+  — `filter` is a substring of the case name (e.g. `upload`, `bcrypt`).
+- Cases: FileUpload block encrypt/decrypt (4 MiB), armored message decrypt
+  (4 MiB), `BigUInt.modPow` 2048-bit, bcrypt cost 10,
+  `TransferQueue.enqueueTree` of 3k files, `DriveItemOrdering` filter+sort.
+  Each prints the median and min of N runs after a warm-up.
+- Performance PRs paste before/after numbers from this harness.
+
 ## 5. Git
 
 - No CI — there are no GitHub workflows or gates.

@@ -13,6 +13,8 @@
 // F8.2 review: a retry whose previous attempt already sent the commit first
 // verifies the draft (UploadCommitVerification — lost commit response), and
 // cancelled/removed jobs' drafts are discarded via `discardDraft`.
+// F8.3-P2: the file streams (FileBlockSource + StreamingUpload) with
+// per-block progress instead of being read whole.
 
 import Foundation
 
@@ -69,36 +71,49 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
             await events.bookmarkRefreshed(refreshed)
         }
         let url = opened.url
-        let data: Data
+        // F8.3-P2: streamed — the file is read block by block (pread) while
+        // blocks are encrypted, signed and sent; nothing whole-file is
+        // held in memory. The source keeps its descriptor open for the job
+        // (inside the security scope above).
+        let source: FileBlockSource
         do {
-            data = try Data(contentsOf: url)
+            source = try FileBlockSource(url: url)
         } catch {
             throw TransferFailure.permanent("cannot read \(job.fileName): \(error.localizedDescription)")
         }
         let parent = try await resolver.folder(shareID: job.shareID, linkID: job.parentLinkID)
         let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
         await progress(0)
-        // Whole-file, sequential blocks (F4.3 verified path — no per-block
-        // progress yet; the queue jumps 0 → total per file at F4.4).
-        let done = try await drive.uploadFile(
-            shareID: job.shareID,
-            parentLinkID: job.parentLinkID,
-            fileName: job.fileName,
-            data: data,
-            parentKeys: parent.keys,
-            parentHashKey: parent.hashKey,
-            addressKeys: addressKeys,
-            addressID: parent.addressID,
-            signatureAddress: parent.signatureEmail,
-            signatureEmail: parent.signatureEmail,
-            modificationTime: mtime,
-            clientUID: job.clientUID,
-            knownDraftLinkID: job.draftLinkID,
-            onDraftCreated: events.draftCreated,
-            onCommitSending: events.commitSending
-        )
-        await progress(Int64(data.count))
-        return done.linkID
+        do {
+            let done = try await drive.uploadFile(
+                shareID: job.shareID,
+                parentLinkID: job.parentLinkID,
+                fileName: job.fileName,
+                source: source,
+                parentKeys: parent.keys,
+                parentHashKey: parent.hashKey,
+                addressKeys: addressKeys,
+                addressID: parent.addressID,
+                signatureAddress: parent.signatureEmail,
+                signatureEmail: parent.signatureEmail,
+                modificationTime: mtime,
+                clientUID: job.clientUID,
+                knownDraftLinkID: job.draftLinkID,
+                onDraftCreated: events.draftCreated,
+                onCommitSending: events.commitSending,
+                progress: progress // per uploaded block
+            )
+            await progress(source.size)
+            return done.linkID
+        } catch UploadSourceError.changedDuringUpload {
+            // F8.3 review: written/appended/replaced while it uploaded —
+            // the draft was discarded; a retry now would race the writer.
+            throw TransferFailure.permanent(UploadSourceError.changedMessage(fileName: job.fileName))
+        } catch let error as UploadSourceError {
+            // The file changed or became unreadable mid-upload: retrying
+            // the same job would hit the same file — permanent.
+            throw TransferFailure.permanent("cannot read \(job.fileName): \(error)")
+        }
     }
 
     /// Deletes a cancelled/removed job's draft (delete_multiple on its

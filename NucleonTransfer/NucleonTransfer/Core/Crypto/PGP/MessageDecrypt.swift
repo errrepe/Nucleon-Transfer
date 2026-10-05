@@ -33,11 +33,13 @@ enum MessageDecrypt {
     /// (SignatureVerification.inline, F8.1-S2).
     static func decryptPackets(armored: String, candidates: [DecryptCandidate]) throws -> Data {
         let raw = try Armor.decode(armored)
-        let packets = try PGPPackets.parse(raw)
+        // Slices: the SEIPD body is decrypted straight from `raw` (no
+        // copy). The small PKESK body is rebased — MPI.read indexes from 0.
+        let packets = try PGPPackets.parseSlices(raw)
         guard let pkeskBody = packets.first(where: { $0.tag == 1 })?.body else {
             throw MessageDecryptError.noPKESK
         }
-        let pkesk = try PKESK_ECDH.parse(body: pkeskBody)
+        let pkesk = try PKESK_ECDH.parse(body: Data(pkeskBody))
         if packets.contains(where: { $0.tag == 9 }) {
             throw SEDError.integrityProtectionRequired
         }

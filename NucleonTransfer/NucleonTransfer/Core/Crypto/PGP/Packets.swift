@@ -1,7 +1,8 @@
 // Nucleon Transfer — OpenPGP packet framing (RFC 4880 §4).
 // Supports new-format definite lengths, partial body lengths (concatenated,
 // as used by streamed encrypted-data packets) and old-format 1/2/4-octet
-// lengths + indeterminate (rest of data).
+// lengths + indeterminate (rest of data). `parseSlices` hands out
+// definite-length bodies as slices of the input (no copy, F8.3-P1).
 import Foundation
 
 enum PacketError: Error, Sendable {
@@ -18,7 +19,20 @@ struct PGPPacket: Sendable {
 }
 
 enum PGPPackets {
+    /// Parses packets with ZERO-BASED bodies (each body is its own Data):
+    /// safe for consumers that index bodies with absolute offsets.
     static func parse(_ data: Data) throws -> [PGPPacket] {
+        try parseSlices(data).map { p in
+            p.body.startIndex == 0 ? p : PGPPacket(tag: p.tag, body: Data(p.body))
+        }
+    }
+
+    /// Same framing as `parse`, but definite-length bodies are slices of
+    /// `data` (shared storage, no copy; `startIndex` is generally non-zero).
+    /// Partial-length bodies are concatenated into a fresh buffer. Only for
+    /// consumers that index bodies relative to `startIndex` (F8.3-P1: the
+    /// multi-MiB SEIPD/literal decrypt path).
+    static func parseSlices(_ data: Data) throws -> [PGPPacket] {
         var out: [PGPPacket] = []
         var i = data.startIndex
         let end = data.endIndex
@@ -29,7 +43,11 @@ enum PGPPackets {
                 // New format.
                 let tag = Int(b0 & 0x3F)
                 i = data.index(after: i)
-                var body = Data()
+                // Single definite chunk → slice; partial chunks → appended.
+                var body: Data? = nil
+                func add(_ chunk: Data) {
+                    if body == nil { body = chunk } else { body!.append(chunk) }
+                }
                 while true {
                     guard i < end else { throw PacketError.truncated }
                     let l0 = Int(data[i])
@@ -38,7 +56,7 @@ enum PGPPackets {
                         i = data.index(i, offsetBy: 1)
                         guard let sliceEnd = data.index(i, offsetBy: len, limitedBy: end),
                               sliceEnd <= end else { throw PacketError.truncated }
-                        body.append(data[i..<sliceEnd])
+                        add(data[i..<sliceEnd])
                         i = sliceEnd
                         break // definite: packet complete
                     } else if l0 < 224 {
@@ -48,7 +66,7 @@ enum PGPPackets {
                         guard let sliceEnd = data.index(i, offsetBy: len, limitedBy: end) else {
                             throw PacketError.truncated
                         }
-                        body.append(data[i..<sliceEnd])
+                        add(data[i..<sliceEnd])
                         i = sliceEnd
                         break
                     } else if l0 < 255 {
@@ -58,7 +76,7 @@ enum PGPPackets {
                         guard let sliceEnd = data.index(i, offsetBy: len, limitedBy: end) else {
                             throw PacketError.truncated
                         }
-                        body.append(data[i..<sliceEnd])
+                        add(data[i..<sliceEnd])
                         i = sliceEnd
                         continue
                     } else {
@@ -73,12 +91,12 @@ enum PGPPackets {
                         guard let sliceEnd = data.index(i, offsetBy: len, limitedBy: end) else {
                             throw PacketError.truncated
                         }
-                        body.append(data[i..<sliceEnd])
+                        add(data[i..<sliceEnd])
                         i = sliceEnd
                         break
                     }
                 }
-                out.append(PGPPacket(tag: tag, body: body))
+                out.append(PGPPacket(tag: tag, body: body ?? Data()))
             } else {
                 // Old format.
                 let tag = Int((b0 >> 2) & 0x0F)
@@ -107,10 +125,10 @@ enum PGPPackets {
                     guard let sliceEnd = data.index(i, offsetBy: len, limitedBy: end) else {
                         throw PacketError.truncated
                     }
-                    out.append(PGPPacket(tag: tag, body: Data(data[i..<sliceEnd])))
+                    out.append(PGPPacket(tag: tag, body: data[i..<sliceEnd]))
                     i = sliceEnd
                 } else {
-                    out.append(PGPPacket(tag: tag, body: Data(data[i..<end])))
+                    out.append(PGPPacket(tag: tag, body: data[i..<end]))
                     i = end
                 }
             }

@@ -1,12 +1,16 @@
-// Nucleon Transfer — SED/SEIPDv1 encrypt (RFC 4880 §13.9, F4.1).
-// Exact inverse of SEDDecrypt + AESBlock.openPGPcfbDecrypt: random prefix +
-// check bytes, resync=true CFB for tag 9, resync=false CFB + MDC (SHA-1 over
-// full prefix + data + D3 14) for tag 18 v1.
+// Nucleon Transfer — SED/SEIPDv1 encrypt (RFC 4880 §13.9, F4.1, F8.3-P1).
+// Exact inverse of SEDDecrypt: random prefix + check bytes, then NoResync
+// CFB + MDC (SHA-1 over full prefix + data + D3 14) for tag 18 v1. NoResync
+// OpenPGP CFB is standard CFB-128 with a zero IV, so one CCCryptor streams
+// prefix, data and MDC straight into the preallocated output (no plaintext
+// copy). Resync CFB (tag 9, `useMDC: false`) is kept only so tests can
+// build the legacy packets the decrypt side must refuse.
+import CommonCrypto
+import CryptoKit
 import Foundation
 
 enum SEDEncryptError: Error, Sendable {
     case badKeyLength
-    case plaintextTooShort
 }
 
 enum SEDEncrypt {
@@ -17,73 +21,68 @@ enum SEDEncrypt {
     static func encrypt(inner: Data, sessionKey: Data, symAlgoID: UInt8, useMDC: Bool) throws -> Data {
         let keyLen = try PGPSymmetricAlgo.keyLength(id: symAlgoID)
         guard sessionKey.count == keyLen else { throw SEDEncryptError.badKeyLength }
-        let prefix = (0..<16).map { _ in UInt8.random(in: .min ... .max) }
-        var plain = Data(prefix)
-        plain.append(prefix[14])
-        plain.append(prefix[15])
-        if useMDC {
-            plain.append(inner)
-            plain.append(contentsOf: [0xD3, 0x14])
-            // MDC input (go-crypto parity) is the FULL plaintext prefix
-            // (18 bytes, incl. check) + data + D3 14.
-            plain.append(try PGPHash.digest(id: 2, plain))
-            return Data([0x01]) + (try openPGPcfbEncrypt(plaintext: plain, key: sessionKey, resync: false))
-        }
-        plain.append(inner)
-        return try openPGPcfbEncrypt(plaintext: plain, key: sessionKey, resync: true)
+        guard useMDC else { return try resyncEncrypt(prefix: randomPrefix(), inner: inner, key: sessionKey) }
+        return try seipd(innerParts: [inner], key: sessionKey, frame: false)
     }
 
-    /// OpenPGP CFB encrypt with prefix, mirroring
-    /// AESBlock.openPGPcfbDecrypt (same zero IV, same resync branches).
-    /// `plaintext` must include the blockSize+2 prefix (caller-built).
-    static func openPGPcfbEncrypt(plaintext: Data, key: Data, blockSize: Int = 16, resync: Bool) throws -> Data {
-        guard plaintext.count >= blockSize + 2 else { throw SEDEncryptError.plaintextTooShort }
-        let p = Array(plaintext)
-        var out: [UInt8] = []
-        out.reserveCapacity(p.count)
+    /// Complete SEIPDv1 packet (tag 18 framing + body) over the
+    /// concatenation of `innerParts`, which are streamed through the
+    /// cipher and the MDC without being joined: one output allocation.
+    static func seipdPacket(innerParts: [Data], sessionKey: Data, symAlgoID: UInt8) throws -> Data {
+        let keyLen = try PGPSymmetricAlgo.keyLength(id: symAlgoID)
+        guard sessionKey.count == keyLen else { throw SEDEncryptError.badKeyLength }
+        return try seipd(innerParts: innerParts, key: sessionKey, frame: true)
+    }
 
-        var fr = [UInt8](repeating: 0, count: blockSize)
-        guard fr.count == blockSize else { throw SEDEncryptError.plaintextTooShort }
-        var fre = try Array(AESBlock.encrypt(block: Data(fr), key: key))
-        for i in 0..<blockSize {
-            out.append(p[i] ^ fre[i])
-        }
-        fr = Array(out[0..<blockSize])
-        fre = try Array(AESBlock.encrypt(block: Data(fr), key: key))
-        out.append(p[blockSize] ^ fre[0])
-        out.append(p[blockSize + 1] ^ fre[1])
-        if resync {
-            fr = Array(out[2..<(blockSize + 2)])
-            var pos = blockSize + 2
-            while pos < p.count {
-                fre = try Array(AESBlock.encrypt(block: Data(fr), key: key))
-                let end = min(pos + blockSize, p.count)
-                for i in pos..<end {
-                    out.append(p[i] ^ fre[i - pos])
-                }
-                if end - pos == blockSize {
-                    fr = Array(out[pos..<end])
-                }
-                pos = end
+    private static func seipd(innerParts: [Data], key: Data, frame: Bool) throws -> Data {
+        let prefix = randomPrefix()
+        // MDC input (go-crypto parity) is the FULL plaintext prefix
+        // (18 bytes, incl. check) + data + D3 14.
+        var sha = Insecure.SHA1()
+        prefix.withUnsafeBytes { sha.update(bufferPointer: $0) }
+        for part in innerParts { part.withUnsafeBytes { sha.update(bufferPointer: $0) } }
+        var trailer: [UInt8] = [0xD3, 0x14]
+        trailer.withUnsafeBytes { sha.update(bufferPointer: $0) }
+        trailer.append(contentsOf: sha.finalize())
+
+        let innerCount = innerParts.reduce(0) { $0 + $1.count }
+        let bodyCount = 1 + prefixLength + innerCount + trailer.count
+        var out = frame ? PGPPacketsEncode.header(tag: 18, length: bodyCount) : Data()
+        out.reserveCapacity(out.count + bodyCount)
+        out.append(0x01) // SEIPD version
+        var o = out.count
+        out.count += bodyCount - 1
+        let stream = try AESBlock.CFBStream(CCOperation(kCCEncrypt), key: key)
+        try out.withUnsafeMutableBytes { dst in
+            func put(_ src: UnsafeRawBufferPointer) throws {
+                try stream.update(src, into: UnsafeMutableRawBufferPointer(rebasing: dst[o...]))
+                o += src.count
             }
-        } else {
-            // No resync (SEIPDv1): splice check ciphertext into FR, continue.
-            fre[0] = out[blockSize]
-            fre[1] = out[blockSize + 1]
-            var used = 2
-            var pos = blockSize + 2
-            while pos < p.count {
-                if used == fre.count {
-                    fre = try Array(AESBlock.encrypt(block: Data(fre), key: key))
-                    used = 0
-                }
-                let c = p[pos] ^ fre[used]
-                fre[used] = c
-                used += 1
-                out.append(c)
-                pos += 1
-            }
+            try prefix.withUnsafeBytes(put)
+            for part in innerParts { try part.withUnsafeBytes(put) }
+            try trailer.withUnsafeBytes(put)
         }
-        return Data(out)
+        return out
+    }
+
+    private static func randomPrefix() -> [UInt8] {
+        var prefix = [UInt8](repeating: 0, count: prefixLength)
+        for i in 0..<16 { prefix[i] = UInt8.random(in: .min ... .max) }
+        prefix[16] = prefix[14]
+        prefix[17] = prefix[15]
+        return prefix
+    }
+
+    /// Random prefix (one AES block) + 2 check octets.
+    static let prefixLength = 18
+
+    /// Legacy tag 9 resync CFB (RFC 4880 §13.9 steps 1-9): the 18 prefix
+    /// octets are plain CFB from a zero IV; the data then restarts CFB with
+    /// FR = c[2..<18]. Test-only in practice — decrypt refuses tag 9.
+    private static func resyncEncrypt(prefix: [UInt8], inner: Data, key: Data) throws -> Data {
+        let op = CCOperation(kCCEncrypt)
+        let head = try AESBlock.cfb(op, Data(prefix), key: key, iv: nil)
+        let tail = try AESBlock.cfb(op, inner, key: key, iv: head.subdata(in: 2..<prefixLength))
+        return head + tail
     }
 }

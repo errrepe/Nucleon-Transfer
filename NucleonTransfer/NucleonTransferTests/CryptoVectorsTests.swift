@@ -76,6 +76,17 @@ struct CryptoVectorsTests {
         #expect(String(data: v3, encoding: .utf8) == "$2y$10$abcdefghijklmnopqrstuunYspUDVwxKwnshT7FzjzjwI57RV2KKa")
     }
 
+    @Test(arguments: [
+        // jBCrypt TestBCrypt canonical vectors (cost 6).
+        ("a", "$2a$06$m0CrhHm10qJ3lXRY.5zDGO", "$2a$06$m0CrhHm10qJ3lXRY.5zDGO3rS2KdeeWLuGmsfGlMfOxih58VYVfxe"),
+        ("abcdefghijklmnopqrstuvwxyz", "$2a$06$.rCVZVOThsIa97pEDOxvGu",
+         "$2a$06$.rCVZVOThsIa97pEDOxvGuRRgzG64bvtJ0938xuqzv18d3ZpQhstC"),
+    ])
+    func bcryptCanonicalVectors(password: String, salt: String, expected: String) throws {
+        let out = try ProtonBcryptHasher().hash(password: Data(password.utf8), dotSlashSalt: salt)
+        #expect(String(decoding: out, as: UTF8.self) == expected)
+    }
+
     @Test func s2kIteratedSHA256() throws {
         // Iterated (t=3), SHA-256, 8-byte salt, count 65536 (0x60).
         // Reference: independent Python implementation.
@@ -754,7 +765,8 @@ struct CryptoVectorsTests {
         // encryptSigned (OPS + literal + SIG) to the node key, node-signed.
         let json = try FileUpload.xAttrJSON(
             modificationTime: Date(timeIntervalSince1970: 1_700_000_000),
-            size: 26, mimeType: "text/plain; charset=utf-8", blockSizes: [26]
+            size: 26, mimeType: "text/plain; charset=utf-8", blockSizes: [26],
+            sha1: Data(Insecure.SHA1.hash(data: Data("abc".utf8)))
         )
         let dict = try #require(JSONSerialization.jsonObject(with: json) as? [String: Any])
         let common = try #require(dict["Common"] as? [String: Any])
@@ -762,6 +774,8 @@ struct CryptoVectorsTests {
         #expect(common["MIMEType"] as? String == "text/plain; charset=utf-8")
         #expect(common["BlockSizes"] as? [Int] == [26])
         #expect((common["ModificationTime"] as? String)?.contains("2023-11-14") == true)
+        // Digests.SHA1: lowercase hex (FIPS 180 "abc" vector).
+        #expect(common["Digests"] as? [String: String] == ["SHA1": "a9993e364706816aba3e25717850c26c9cd0d89d"])
         let node = try FolderCreate.generateNode()
         let recipient = try #require(node.ecdhRecipient)
         let armored = try FileUpload.buildXAttr(
@@ -831,11 +845,13 @@ struct CryptoVectorsTests {
         )
         #expect(cf == 9)
         #expect(opened == prepared.contentKey)
-        // ...and its signature verifies with the node point over raw bytes.
+        // ...and its signature verifies with the node point over the SESSION
+        // KEY (F8.3-P2 upstream form), not over the raw packet bytes.
         let ckpRaw = try #require(Data(base64Encoded: prepared.request.contentKeyPacket))
         let ckpSigBody = try #require(try PGPPackets.parse(try Armor.decode(prepared.request.contentKeyPacketSignature)).first(where: { $0.tag == 2 }).map(\.body))
         let nodePoint = try Curve25519.Signing.PrivateKey(rawRepresentation: prepared.node.generated.edSeed).publicKey.rawRepresentation
-        #expect(try DetachedSig.parse(body: ckpSigBody).verify(data: ckpRaw, signerPointMPI: nodePoint) == true)
+        #expect(try DetachedSig.parse(body: ckpSigBody).verify(data: prepared.contentKey, signerPointMPI: nodePoint) == true)
+        #expect(try DetachedSig.parse(body: ckpSigBody).verify(data: ckpRaw, signerPointMPI: nodePoint) == false)
         // Name + passphrase envelope: parent-decryptable, address-signed.
         let parentCands = parentKeys.compactMap(\.candidate)
         #expect(try MessageDecrypt.decrypt(armored: prepared.request.name, candidates: parentCands) == Data("NT-F43-FIXTURE.txt".utf8))
@@ -844,8 +860,8 @@ struct CryptoVectorsTests {
         let passSigBody = try #require(try PGPPackets.parse(try Armor.decode(prepared.request.nodePassphraseSignature)).first(where: { $0.tag == 2 }).map(\.body))
         #expect(try DetachedSig.parse(body: passSigBody).verify(data: Data(passBytes), signerPointMPI: addrPoint) == true)
         // Single-block descriptor: 77B packet (26B + 51 rule, rclone parity),
-        // hash over ENCRYPTED bytes, address-signed EncSignature decryptable
-        // by the node.
+        // hash over ENCRYPTED bytes, EncSignature (address key over the
+        // plaintext) decryptable by the node.
         #expect(prepared.blocks.count == 1)
         let block = prepared.blocks[0]
         #expect(block.index == 1)
@@ -854,7 +870,9 @@ struct CryptoVectorsTests {
         #expect(try FileUpload.decryptBlock(block.encrypted, contentKey: prepared.contentKey) == fileData)
         let sigBytes = try MessageDecrypt.decrypt(armored: block.encSignature, candidates: nodeCands)
         let innerSig = try #require(try PGPPackets.parse(Data(sigBytes)).first(where: { $0.tag == 2 }).map(\.body))
-        #expect(try DetachedSig.parse(body: innerSig).verify(data: block.hash, signerPointMPI: addrPoint) == true)
+        // F8.3-P2 upstream form: the address key signs the PLAINTEXT block.
+        #expect(try DetachedSig.parse(body: innerSig).verify(data: fileData, signerPointMPI: addrPoint) == true)
+        #expect(try DetachedSig.parse(body: innerSig).verify(data: block.hash, signerPointMPI: addrPoint) == false)
         // Commit: manifest over the block hash verifies with the address
         // point; XAttr decrypts with the node candidate to the JSON.
         let commit = try FileUpload.buildCommit(
@@ -874,6 +892,8 @@ struct CryptoVectorsTests {
         let xcommon = try #require(xattrDict["Common"] as? [String: Any])
         #expect(xcommon["Size"] as? Int == 26)
         #expect((xcommon["BlockSizes"] as? [Int]) == [26])
+        let sha1Hex = Insecure.SHA1.hash(data: fileData).map { String(format: "%02x", $0) }.joined()
+        #expect(xcommon["Digests"] as? [String: String] == ["SHA1": sha1Hex])
     }
 
     @Test func mimeTypeSniffVectors() throws {
@@ -897,6 +917,35 @@ struct CryptoVectorsTests {
         #expect(text.contains("Content-Type: application/octet-stream\r\n"))
         #expect(text.hasSuffix("\r\n--BND--\r\n"))
         #expect(body.range(of: bytes) != nil)
+    }
+
+    @Test func storageMultipartIsExactlyPrefixBlockSuffix() {
+        // F8.3 review: single allocation, byte-exact framing around the block.
+        let bytes = Data((0..<5000).map { UInt8($0 & 0xFF) })
+        let body = FileUpload.multipartBlockBody(boundary: "BND", blockBytes: bytes)
+        let prefix = Data("--BND\r\nContent-Disposition: form-data; name=\"Block\"; filename=\"blob\"\r\nContent-Type: application/octet-stream\r\n\r\n".utf8)
+        let suffix = Data("\r\n--BND--\r\n".utf8)
+        #expect(body == prefix + bytes + suffix)
+        let empty = FileUpload.multipartBlockBody(boundary: "BND", blockBytes: Data())
+        #expect(empty == prefix + suffix)
+    }
+
+    @Test func xAttrModificationTimeIsRFC3339UTCWithZ() throws {
+        // F8.3 review: both official SDKs write UTC `Z` (js toISOString,
+        // C# "O"); every upstream parser accepts it — see xAttrJSON.
+        for (t, expected) in [
+            (1_700_000_000.0, "2023-11-14T22:13:20Z"),
+            (1_700_000_000.75, "2023-11-14T22:13:20Z"), // second precision
+            (0.0, "1970-01-01T00:00:00Z"),
+        ] {
+            let json = try FileUpload.xAttrJSON(
+                modificationTime: Date(timeIntervalSince1970: t),
+                size: 0, mimeType: "text/plain", blockSizes: [], sha1: Data(count: 20)
+            )
+            let dict = try #require(JSONSerialization.jsonObject(with: json) as? [String: Any])
+            let common = try #require(dict["Common"] as? [String: Any])
+            #expect(common["ModificationTime"] as? String == expected)
+        }
     }
 
     @Test func blocksAndCommitJSONKeys() throws {

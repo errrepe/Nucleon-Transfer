@@ -12,7 +12,9 @@
 //     free " (n)" and the move is retried;
 //   - folders are created exclusively too: case-only siblings get distinct
 //     local names ("docs (1)") instead of merging;
-//   - the temp file is removed on any failure, cancellation included.
+//   - the temp file is removed on any failure, cancellation included;
+//   - F8.3-P2: streaming downloads hand over a finished part file
+//     (`place`); `write` is writePart + place.
 // Disk I/O for the bytes runs outside the actor (only the cheap name
 // bookkeeping is serialized). Sanitize + containment stay in FileDownload.
 
@@ -43,12 +45,23 @@ actor DownloadPlacement {
     ) async throws -> URL {
         try Task.checkCancellation()
         let name = SafeFilename.sanitize(remoteName, fallback: fallback)
-        var dest = try await reserveFile(in: directory, remoteName: remoteName, fallback: fallback, root: root)
-        let part: URL
+        let part = try FileDownload.writePart(data, in: directory, name: name)
+        return try await place(part: part, in: directory, remoteName: remoteName, fallback: fallback, root: root)
+    }
+
+    /// Moves an already written part file (F8.3-P2 streaming download; it
+    /// must live in `directory`) to a free name for `remoteName`: reserved
+    /// name, exclusive rename, next " (n)" when taken at move time. The
+    /// part file is removed on ANY failure, cancellation included.
+    nonisolated func place(
+        part: URL, in directory: URL, remoteName: String, fallback: String, root: URL
+    ) async throws -> URL {
+        var dest: URL
         do {
-            part = try FileDownload.writePart(data, in: directory, name: name)
+            try Task.checkCancellation()
+            dest = try await reserveFile(in: directory, remoteName: remoteName, fallback: fallback, root: root)
         } catch {
-            await release(dest)
+            try? FileManager.default.removeItem(at: part)
             throw error
         }
         do {

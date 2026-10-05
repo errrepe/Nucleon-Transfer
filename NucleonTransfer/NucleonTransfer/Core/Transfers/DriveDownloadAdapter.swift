@@ -8,11 +8,12 @@
 //   getLink -> unlockNode (parent candidates + SignatureEmail signer points,
 //   fail-closed) -> openContentKey (node candidates) + content-key signature
 //   -> getRevision (activeRevision.ID, fallback: listRevisions last) ->
-//   manifest signature (F8.1-S2) -> download blocks in parallel (TaskGroup,
-//   max 4) -> FileDownload.reassemble (hash-verify + decrypt + block
-//   EncSignature) ->
-//   DownloadPlacement.write (reserved conflict-free name, unique temp file,
-//   exclusive rename — never replaces an existing item, F8.2-R5).
+//   manifest signature (F8.1-S2) -> FileDownload.downloadToPart (F8.3-P2:
+//   blocks fetched in parallel, hash-verify + decrypt + block EncSignature
+//   off this actor, written in order into a `.nucleon-part` with a reorder
+//   window of maxConcurrentBlocks — memory bounded, not file-sized) ->
+//   DownloadPlacement.place (reserved conflict-free name, exclusive
+//   rename — never replaces an existing item, F8.2-R5).
 // Folders download recursively (children listing + name decrypt), preserving
 // structure — including the folder itself: "Vacation" lands as
 // <destination>/Vacation/… ("Vacation (1)" if that exists, F8.2-R6); files
@@ -44,14 +45,19 @@ actor DriveDownloadAdapter {
 
     // MARK: - single file
 
-    /// Downloads one FILE link's bytes (no disk I/O here — caller writes).
-    /// Reports per-block completion (0...blocks.count) for progress UI.
-    func downloadFileBytes(
+    /// Downloads one FILE link into a new part file in `directory`
+    /// (F8.3-P2: streamed — FileDownload.downloadToPart; the caller places
+    /// it with DownloadPlacement.place). `partName` is the (untrusted)
+    /// remote name, sanitized for the part file's stem. Reports per-block
+    /// completion (0...blocks.count) for progress UI.
+    func downloadFileToPart(
         shareID: String,
         link: DriveLink,
         parentKeys: [KeyringCache.UnlockedKey],
-        progress: (@Sendable (Int, Int) async -> Void)? = nil
-    ) async throws -> Data {
+        directory: URL,
+        partName: String,
+        progress: @Sendable (Int, Int) async -> Void = { _, _ in }
+    ) async throws -> (part: URL, size: Int64) {
         let nodeKeys = try DecryptChain.unlockNode(
             link, parentCandidates: parentKeys.compactMap(\.candidate),
             signerPoints: DecryptChain.nodeSignerPoints(
@@ -89,7 +95,7 @@ actor DriveDownloadAdapter {
         )
         let ordered = revision.blocks.sorted { $0.index < $1.index }
         // Manifest BEFORE any block is fetched: the signed hash list pins
-        // every block (reassemble then checks bytes against those hashes).
+        // every block (downloadToPart checks each block against them).
         // Signer: the revision's SignatureEmail address keys (C# SDK
         // RevisionReader.cs VerifyManifestAsync), else the link author's;
         // the node key always. A foreign/unknown claimed email is NOT
@@ -114,50 +120,20 @@ actor DriveDownloadAdapter {
             signerPoints: signers.points,
             claimResolved: signers.claimResolved
         )
-        guard !ordered.isEmpty else {
-            return Data() // 0-byte file: no blocks (upload parity §1.4)
-        }
         // Block EncSignatures: same trusted set (Proton-API-Bridge
         // file_download.go getSignatureVerificationKeyring: uploader's
-        // address keys + node key).
+        // address keys + node key). A 0-byte file has no blocks and yields
+        // an empty part file (upload parity §1.4).
         let blockCheck = FileDownload.BlockSignatureCheck(
             nodeCandidates: nodeCandidates, signerPoints: signers.points
         )
-        var fetched = [FileDownload.FetchedBlock?](repeating: nil, count: ordered.count)
-        try await withThrowingTaskGroup(of: (Int, FileDownload.FetchedBlock).self) { group in
-            var next = 0
-            var inFlight = 0
-            func submit(_ i: Int) {
-                let block = ordered[i]
-                group.addTask {
-                    let bytes = try await self.drive.downloadBlockBytes(block: block)
-                    return (i, FileDownload.FetchedBlock(
-                        index: block.index, encrypted: bytes,
-                        expectedHashB64: block.hash,
-                        encSignature: block.encSignature
-                    ))
-                }
-            }
-            while next < ordered.count, inFlight < maxConcurrentBlocks {
-                submit(next); next += 1; inFlight += 1
-            }
-            var done = 0
-            while done < ordered.count {
-                try Task.checkCancellation()
-                let (i, fb) = try await group.next()!
-                fetched[i] = fb
-                done += 1
-                inFlight -= 1
-                if let progress { await progress(done, ordered.count) }
-                if next < ordered.count {
-                    submit(next); next += 1; inFlight += 1
-                }
-            }
-        }
-        try Task.checkCancellation()
-        return try FileDownload.reassemble(
-            blocks: fetched.compactMap { $0 }, contentKey: contentKey,
-            signatures: blockCheck
+        let drive = self.drive
+        return try await FileDownload.downloadToPart(
+            blocks: ordered, contentKey: contentKey, signatures: blockCheck,
+            window: maxConcurrentBlocks, directory: directory,
+            name: SafeFilename.sanitize(partName, fallback: link.linkID),
+            fetch: { try await drive.downloadBlockBytes(block: $0) },
+            progress: progress
         )
     }
 
@@ -178,15 +154,15 @@ actor DriveDownloadAdapter {
             throw FileDownloadError.missingRevision
         }
         let parentKeys = try await parentKeysFor(shareID: shareID, link: link)
-        let bytes = try await downloadFileBytes(
-            shareID: shareID, link: link, parentKeys: parentKeys,
-            progress: progress
-        )
         let name = (try? DecryptChain.decryptName(
             link, parentCandidates: parentKeys.compactMap(\.candidate)
         )) ?? link.linkID
-        return try await placement.write(
-            bytes, in: directory, remoteName: name, fallback: link.linkID, root: directory
+        let file = try await downloadFileToPart(
+            shareID: shareID, link: link, parentKeys: parentKeys,
+            directory: directory, partName: name, progress: progress ?? { _, _ in }
+        )
+        return try await placement.place(
+            part: file.part, in: directory, remoteName: name, fallback: link.linkID, root: directory
         )
     }
 
@@ -207,17 +183,18 @@ actor DriveDownloadAdapter {
         await resolver.remember([link])
         if !link.isFolder {
             let parentKeys = try await parentKeysFor(shareID: shareID, link: link)
-            let bytes = try await downloadFileBytes(
-                shareID: shareID, link: link, parentKeys: parentKeys
-            )
             let name = (try? DecryptChain.decryptName(
                 link, parentCandidates: parentKeys.compactMap(\.candidate)
             )) ?? link.linkID
-            let dest = try await placement.write(
-                bytes, in: destination, remoteName: name, fallback: link.linkID, root: destination
+            let file = try await downloadFileToPart(
+                shareID: shareID, link: link, parentKeys: parentKeys,
+                directory: destination, partName: name
+            )
+            let dest = try await placement.place(
+                part: file.part, in: destination, remoteName: name, fallback: link.linkID, root: destination
             )
             if let progress {
-                await progress(dest.lastPathComponent, Int64(bytes.count), Int64(bytes.count))
+                await progress(dest.lastPathComponent, file.size, file.size)
             }
             return [dest]
         }
@@ -289,16 +266,17 @@ actor DriveDownloadAdapter {
             var inFlight = 0
             func submit(_ child: NamedChild) {
                 group.addTask { [placement] in
-                    let bytes = try await self.downloadFileBytes(
+                    let file = try await self.downloadFileToPart(
                         shareID: shareID, link: child.link,
-                        parentKeys: folderKeys
+                        parentKeys: folderKeys, directory: localDir,
+                        partName: child.name
                     )
-                    let dest = try await placement.write(
-                        bytes, in: localDir, remoteName: child.name,
+                    let dest = try await placement.place(
+                        part: file.part, in: localDir, remoteName: child.name,
                         fallback: child.link.linkID, root: root
                     )
                     if let progress {
-                        await progress(dest.lastPathComponent, Int64(bytes.count), Int64(bytes.count))
+                        await progress(dest.lastPathComponent, file.size, file.size)
                     }
                     return [dest]
                 }
