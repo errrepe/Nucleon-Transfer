@@ -117,7 +117,8 @@ final class UploadCoordinator {
 
     // MARK: - intake
 
-    /// Enqueues `urls` (files and/or folders, structure preserved) under
+    /// Enqueues `urls` (files and/or folders, structure preserved — a
+    /// dropped folder keeps its own top-level folder, F8.2-R6) under
     /// `destination` — the folder on screen, not a share root. The
     /// security-scope grant is held until this drop's jobs finish
     /// (F8.2-R4), the directory scan runs in a detached task off the main
@@ -146,7 +147,12 @@ final class UploadCoordinator {
                 let entries: [LocalTreeScan.Entry] = try await Task.detached(priority: .userInitiated) {
                     let scanned: [LocalTreeScan.Entry]
                     if isDirectory {
-                        scanned = try LocalTreeScan.collect(root: url).entries
+                        // F8.2-R6: the dropped folder itself is preserved —
+                        // "Vacation" lands as Vacation/… in the destination.
+                        scanned = LocalTreeScan.rooted(
+                            try LocalTreeScan.collect(root: url).entries,
+                            rootName: url.lastPathComponent
+                        )
                     } else {
                         scanned = [LocalTreeScan.Entry(
                             url: url,

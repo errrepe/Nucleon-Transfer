@@ -37,6 +37,23 @@ enum LocalTreeScan {
         var skippedLoopDirs: Int
     }
 
+    /// Re-roots a scan under the dropped folder's own name (F8.2-R6):
+    /// "" → "Vacation", "a/b.txt" → "Vacation/a/b.txt". `enqueueTree`
+    /// never creates the "" entry, so this is what makes dropping
+    /// "Vacation" create `Vacation/` in the destination (its name conflict
+    /// then follows FolderConflictPolicy like any other folder). A root
+    /// name that cannot be a remote name ("", ".", "..", "/") leaves the
+    /// entries unrooted.
+    static func rooted(_ entries: [Entry], rootName: String) -> [Entry] {
+        let name = rootName.precomposedStringWithCanonicalMapping
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else { return entries }
+        return entries.map { entry in
+            var e = entry
+            e.relativePath = entry.relativePath.isEmpty ? name : name + "/" + entry.relativePath
+            return e
+        }
+    }
+
     /// Adds a best-effort security-scoped bookmark to every file entry
     /// (F8.2-R2: created during the detached scan, so enqueue is a single
     /// batch instead of one queue save per file). Must run while the
