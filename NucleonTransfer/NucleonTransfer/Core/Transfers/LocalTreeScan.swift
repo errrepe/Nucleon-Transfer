@@ -22,6 +22,10 @@ enum LocalTreeScan {
         var isDirectory: Bool
         /// File byte size (0 for directories).
         var size: Int64
+        /// Security-scoped bookmark for a file, created during the
+        /// detached scan while the drop's grant is held (F8.2-R2); nil for
+        /// directories, in tests, or when bookmark creation failed.
+        var bookmark: Data? = nil
     }
 
     struct Result: Sendable {
@@ -31,6 +35,23 @@ enum LocalTreeScan {
         var skippedOutsideSymlinks: Int
         /// Directories skipped to break symlink loops.
         var skippedLoopDirs: Int
+    }
+
+    /// Adds a best-effort security-scoped bookmark to every file entry
+    /// (F8.2-R2: created during the detached scan, so enqueue is a single
+    /// batch instead of one queue save per file). Must run while the
+    /// drop's security scope is held; failures leave `bookmark` nil.
+    static func attachingBookmarks(_ entries: [Entry]) -> [Entry] {
+        entries.map { entry in
+            guard !entry.isDirectory else { return entry }
+            var e = entry
+            e.bookmark = try? entry.url.bookmarkData(
+                options: .withSecurityScope,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+            return e
+        }
     }
 
     /// Scans `root` (must be a directory). Deterministic: siblings sorted by name.

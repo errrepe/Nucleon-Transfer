@@ -84,6 +84,13 @@ final class UploadCoordinator {
     /// queue and drops the uploader before calling this.
     func stop() async {
         await queue.setListener(nil)
+        await queue.flush()
+    }
+
+    /// Writes any coalesced (not yet saved) queue change to disk now
+    /// (F8.2-R2). The app also flushes the queue itself on quit.
+    func flush() async {
+        await queue.flush()
     }
 
     // MARK: - intake
@@ -106,22 +113,28 @@ final class UploadCoordinator {
             // grant is intentionally held for the session (see audit note).
             _ = url.startAccessingSecurityScopedResource() // held for the session
             do {
-                let entries: [LocalTreeScan.Entry]
                 var isDir: ObjCBool = false
-                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-                    // Directory scan is synchronous disk I/O: keep it off the
-                    // MainActor so large trees don't freeze the UI.
-                    entries = try await Task.detached(priority: .userInitiated) {
-                        try LocalTreeScan.collect(root: url).entries
-                    }.value
-                } else {
-                    entries = [LocalTreeScan.Entry(
-                        url: url,
-                        relativePath: url.lastPathComponent.precomposedStringWithCanonicalMapping,
-                        isDirectory: false,
-                        size: (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-                    )]
-                }
+                let isDirectory = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+                    && isDir.boolValue
+                // Scan + bookmark creation are synchronous disk I/O: keep
+                // them off the MainActor so large trees don't freeze the UI.
+                // Bookmarks are made here, during the scan, so the queue
+                // gets ONE batch enqueue (F8.2-R2 — per-file setBookmark
+                // saves made big drops quadratic).
+                let entries: [LocalTreeScan.Entry] = try await Task.detached(priority: .userInitiated) {
+                    let scanned: [LocalTreeScan.Entry]
+                    if isDirectory {
+                        scanned = try LocalTreeScan.collect(root: url).entries
+                    } else {
+                        scanned = [LocalTreeScan.Entry(
+                            url: url,
+                            relativePath: url.lastPathComponent.precomposedStringWithCanonicalMapping,
+                            isDirectory: false,
+                            size: (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+                        )]
+                    }
+                    return LocalTreeScan.attachingBookmarks(scanned)
+                }.value
                 let adapter = DriveUploadAdapter(drive: drive, addressKeys: addressKeys, resolver: resolver)
                 let ids = try await queue.enqueueTree(
                     entries: entries,
@@ -129,16 +142,6 @@ final class UploadCoordinator {
                     rootParentLinkID: destination.linkID,
                     folders: adapter
                 )
-                // Best-effort bookmarks so jobs survive moves within the grant.
-                let files = entries.filter { !$0.isDirectory }
-                for (id, entry) in zip(ids, files) {
-                    let bookmark = try? entry.url.bookmarkData(
-                        options: .withSecurityScope,
-                        includingResourceValuesForKeys: nil,
-                        relativeTo: nil
-                    )
-                    await queue.setBookmark(id: id, bookmark)
-                }
                 for id in ids { destinationNames[id] = breadcrumb }
                 // Folder creation happened inside enqueueTree (parent→child):
                 // the remote tree changed under the destination.
