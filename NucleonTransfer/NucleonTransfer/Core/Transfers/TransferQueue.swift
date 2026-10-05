@@ -285,10 +285,16 @@ extension TransferUploader {
 /// must survive a crash/relaunch.
 struct TransferUploadEvents: Sendable {
     /// The remote draft exists (F8.2-R3): LinkID + RevisionID.
-    var draftCreated: @Sendable (_ linkID: String, _ revisionID: String) async -> Void = { _, _ in }
+    var draftCreated: @Sendable (_ linkID: String, _ revisionID: String) async -> Void
+    /// The job's bookmark was stale and has been re-created (F8.2-R4).
+    var bookmarkRefreshed: @Sendable (_ bookmark: Data) async -> Void
 
-    init(draftCreated: @escaping @Sendable (_ linkID: String, _ revisionID: String) async -> Void = { _, _ in }) {
+    init(
+        draftCreated: @escaping @Sendable (_ linkID: String, _ revisionID: String) async -> Void = { _, _ in },
+        bookmarkRefreshed: @escaping @Sendable (_ bookmark: Data) async -> Void = { _ in }
+    ) {
         self.draftCreated = draftCreated
+        self.bookmarkRefreshed = bookmarkRefreshed
     }
 }
 
@@ -723,9 +729,14 @@ actor TransferQueue {
             jobs[id] = first
         }
         var job = first
-        let events = TransferUploadEvents(draftCreated: { [self] linkID, revisionID in
-            await self.recordDraft(id: id, generation: generation, linkID: linkID, revisionID: revisionID)
-        })
+        let events = TransferUploadEvents(
+            draftCreated: { [self] linkID, revisionID in
+                await self.recordDraft(id: id, generation: generation, linkID: linkID, revisionID: revisionID)
+            },
+            bookmarkRefreshed: { [self] bookmark in
+                await self.recordBookmark(id: id, generation: generation, bookmark: bookmark)
+            }
+        )
         // Attempt loop: transient failures back off in-slot; pause/cancel win.
         while true {
             do {
@@ -805,6 +816,14 @@ actor TransferQueue {
         guard owns(id, generation), var j = jobs[id] else { return }
         j.draftLinkID = linkID
         j.draftRevisionID = revisionID
+        jobs[id] = j
+        persist(urgent: true)
+    }
+
+    /// Persists a re-created (previously stale) bookmark (F8.2-R4).
+    private func recordBookmark(id: UUID, generation: UInt64, bookmark: Data) {
+        guard owns(id, generation), var j = jobs[id] else { return }
+        j.localBookmark = bookmark
         jobs[id] = j
         persist(urgent: true)
     }
