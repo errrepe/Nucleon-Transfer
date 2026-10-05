@@ -64,7 +64,7 @@ private final class FakeAuthAPI: SessionAuthAPI {
             // Give concurrent 401s time to pile up on the in-flight refresh.
             try await Task.sleep(for: .milliseconds(50))
         }
-        let json = #"{"UID":"uid","AccessToken":"access-\#(n)","RefreshToken":"refresh-\#(n)","ServerProof":""}"#
+        let json = #"{"UID":"uid","AccessToken":"access-\#(n)","RefreshToken":"refresh-\#(n)"}"#
         return try JSONDecoder().decode(ProtonAuth.self, from: Data(json.utf8))
     }
 

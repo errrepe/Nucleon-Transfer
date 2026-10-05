@@ -32,7 +32,7 @@ private final class RestoreAuthAPI: SessionAuthAPI {
             return s.refreshes.count
         }
         if let failure { throw failure }
-        let json = #"{"UID":"uid","AccessToken":"access-\#(n)","RefreshToken":"refresh-\#(n)","ServerProof":""}"#
+        let json = #"{"UID":"uid","AccessToken":"access-\#(n)","RefreshToken":"refresh-\#(n)"}"#
         return try JSONDecoder().decode(ProtonAuth.self, from: Data(json.utf8))
     }
 
@@ -305,3 +305,16 @@ struct SessionRestoreTests {
 }
 
 private struct SignatureFailureStub: Error {}
+
+/// F8.5 live check regression: Proton's `/auth/v4/refresh` answer has no
+/// `ServerProof` (login-only). A required field made every refresh fail
+/// to decode, surfaced as `.api(code: 1000)` → restore deleted the item.
+struct RefreshResponseShapeTests {
+    @Test func refreshAnswerWithoutServerProofDecodes() throws {
+        let json = #"{"Code":1000,"UID":"uid-1","AccessToken":"acc","RefreshToken":"ref","TokenType":"Bearer","Scopes":["full","self"],"ExpiresIn":86400}"#
+        let auth = try JSONDecoder().decode(AuthResponse.self, from: Data(json.utf8)).auth
+        #expect(auth.uid == "uid-1")
+        #expect(auth.refreshToken == "ref")
+        #expect(auth.serverProof == nil)
+    }
+}

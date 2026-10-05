@@ -42,7 +42,11 @@ struct ProtonAuth: Decodable, Sendable {
     var uid: String
     var accessToken: String
     var refreshToken: String
-    var serverProof: String
+    /// SRP server proof — only `POST /auth/v4` (login) carries it. The
+    /// `/auth/v4/refresh` answer has none, so it must stay optional or
+    /// every refresh fails to decode (F8.5 live check: restore rejected
+    /// with Code 1000). Login still requires it (SessionManager).
+    var serverProof: String?
     /// Session scope: "full" vs "2fa". 2FA is required when scope contains
     /// "2fa" or TwoFA.Enabled != 0 (go-proton-api manager_auth_types.go).
     var scope: String?

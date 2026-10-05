@@ -181,7 +181,7 @@ actor SessionManager {
                                                  clientEphemeral: proofs.clientEphemeral.base64EncodedString(),
                                                  clientProof: proofs.clientProof.base64EncodedString(),
                                                  srpSession: info.srpSession))
-        guard let serverProof = Data(base64Encoded: res.auth.serverProof) else {
+        guard let proof = res.auth.serverProof, let serverProof = Data(base64Encoded: proof) else {
             throw ProtonAPIError.invalidServerProof
         }
         guard constantTimeEquals(serverProof, proofs.expectedServerProof) else {
