@@ -1,14 +1,15 @@
 // Nucleon Transfer — toolbar entry to the transfers popover (F7 S3.2).
 // Lives in the FolderView toolbar (.primaryAction, trailing). The badge
-// counts in-flight transfers; the popover binds to
+// counts failed transfers; the popover binds to
 // `TransferActivityStore.presentTransfers`, which UploadCoordinator also
 // flips on intake so the panel opens on the first upload.
 // Badge note: on macOS 26 `.badge(_:)` on the toolbar button maps to the
-// native NSToolbarItem badge, drawn by the system OUTSIDE the glass
-// capsule (live check — hand-drawn overlays were clipped to the item or
-// covered the icon). The native badge is always red, so state rides in
-// the text: "3" in flight, "3!" in flight with failures, "!3" only
-// failures left (F8.4-U6 — never color alone). Upload speed
+// native NSToolbarItem badge (NSItemBadge: count / text / indicator only,
+// system size and color), drawn OUTSIDE the glass capsule. Per the HIG a
+// badge counts what needs attention, so it shows only the FAILED count;
+// work in flight pulses the icon instead (Safari's downloads button shows
+// progress on the icon, not a badge). Tooltip + VoiceOver carry both
+// counts (F8.4-U6 — never color or motion alone). Upload speed
 // samples come from UploadCoordinator's snapshot listener (F8.4-U7b), not
 // from this view.
 import AppKit
@@ -34,8 +35,10 @@ struct TransfersToolbarButton: View {
             activity.presentTransfers.toggle()
         } label: {
             Label("Transfers", systemImage: "arrow.up.arrow.down")
+                .symbolEffect(.pulse, options: .repeating, isActive: isInFlight)
         }
-        .badge(badgeText)
+        // 0 hides the badge.
+        .badge(failedCount)
         // M4: match the View-menu wording ("Show Transfers") and say
         // what the button does; the active/failed count rides along. The
         // AX label keeps the shorter "Transfers" form.
@@ -56,16 +59,19 @@ struct TransfersToolbarButton: View {
         }
     }
 
-    /// Native toolbar badge text; nil hides it. Digits are localized.
-    private var badgeText: Text? {
+    /// Failed transfers — the only state that needs the user (badge).
+    private var failedCount: Int {
         switch badgeState {
-        case .none:
-            nil
-        case let .active(count, failed):
-            Text(verbatim: failed > 0 ? "\(count.formatted())!" : count.formatted())
-        case let .failed(count):
-            Text(verbatim: "!\(count.formatted())")
+        case .none: 0
+        case let .active(_, failed): failed
+        case let .failed(count): count
         }
+    }
+
+    /// Something is uploading or downloading — the icon pulses.
+    private var isInFlight: Bool {
+        if case .active = badgeState { return true }
+        return false
     }
 
     private var panel: TransfersPanel {
