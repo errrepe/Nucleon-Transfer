@@ -126,17 +126,26 @@ struct BigUInt: Sendable, Equatable {
         return BigUInt(limbs: out)
     }
 
-    /// Remainder via Knuth Algorithm D long division, composed ONLY of exact
-    /// add/sub/mul/compare above. Estimate never undershoots ( Knuth Thm A
-    /// needs no normalization for the >= direction), verify loop decrements
-    /// to the exact digit, subtraction is exact.
+    /// Remainder of a / m (Knuth Algorithm D, see `divmod`).
     static func mod(_ a: BigUInt, _ m: BigUInt) -> BigUInt {
         precondition(!m.isZero, "mod by zero")
         if a.compare(m) < 0 { return a }
         return divmod(a, m).r
     }
 
-    /// Long division. Requires a >= m > 0.
+    /// Long division, Knuth TAOCP vol. 2 §4.3.1 Algorithm D (F8.3-P6).
+    /// Requires a >= m > 0.
+    ///
+    /// D1 normalizes: both operands are shifted left so the divisor's top
+    /// limb has its high bit set. That makes the two-limb quotient estimate
+    /// (refined with the divisor's second limb, D3) at most one too large, so
+    /// the add-back step (D6) runs at most once per digit. Without it the
+    /// estimate can be off by up to ~2^32/top-limb, and correcting it digit by
+    /// digit made e.g. a 96-bit modulus with top limb 0x1234 take seconds.
+    /// The remainder is shifted back right at the end (D8).
+    ///
+    /// All arithmetic is UInt64 on 32-bit limbs: qhat < 2^32 after D3, so
+    /// qhat*v + carry < 2^64 and every step is exact.
     static func divmod(_ a: BigUInt, _ m: BigUInt) -> (q: BigUInt, r: BigUInt) {
         precondition(!m.isZero && a.compare(m) >= 0, "divmod requires a >= m > 0")
         if m.limbs.count == 1 {
@@ -151,41 +160,83 @@ struct BigUInt: Sendable, Equatable {
             return (BigUInt(limbs: q), BigUInt(limbs: [UInt32(rem)]))
         }
 
+        let base: UInt64 = 1 << 32
         let n = m.limbs.count
         let mm = a.limbs.count - n
-        var un = a.limbs
-        while un.count < mm + n + 1 { un.append(0) }
-        let vn = m.limbs
-        let vBig = BigUInt(limbs: vn)
+
+        // D1: normalize. shift < 32; `n` and `a` are normalized, so the top
+        // limbs are non-zero.
+        let shift = m.limbs[n - 1].leadingZeroBitCount
+        var vn = [UInt32](repeating: 0, count: n)
+        var un = [UInt32](repeating: 0, count: mm + n + 1)
+        if shift == 0 {
+            for i in 0..<n { vn[i] = m.limbs[i] }
+            for i in 0..<(mm + n) { un[i] = a.limbs[i] }
+        } else {
+            let back = UInt32(32 - shift), sh = UInt32(shift)
+            for i in stride(from: n - 1, to: 0, by: -1) {
+                vn[i] = (m.limbs[i] << sh) | (m.limbs[i - 1] >> back)
+            }
+            vn[0] = m.limbs[0] << sh
+            un[mm + n] = a.limbs[mm + n - 1] >> back
+            for i in stride(from: mm + n - 1, to: 0, by: -1) {
+                un[i] = (a.limbs[i] << sh) | (a.limbs[i - 1] >> back)
+            }
+            un[0] = a.limbs[0] << sh
+        }
+        let vTop = UInt64(vn[n - 1]), vNext = UInt64(vn[n - 2])
         var q = [UInt32](repeating: 0, count: mm + 1)
 
         for j in stride(from: mm, through: 0, by: -1) {
-            // Estimate from top two window words / top divisor word.
-            // Numerator < 2^64 (top window word < divisor top word by invariant),
-            // so plain UInt64 division is exact. Clamp to base-1.
-            var qhat: UInt64
-            if un[j + n] == vn[n - 1] {
-                qhat = UInt64(UInt32.max)
-            } else {
-                let num = (UInt64(un[j + n]) << 32) | UInt64(un[j + n - 1])
-                qhat = num / UInt64(vn[n - 1])
-                if qhat > UInt64(UInt32.max) { qhat = UInt64(UInt32.max) }
-            }
-            // Decrement until qhat * vn fits the window (exact check).
-            var prod = mul(BigUInt(limbs: [UInt32(qhat & 0xFFFF_FFFF), UInt32(qhat >> 32)]), vBig)
-            var window = BigUInt(limbs: Array(un[j..<(j + n + 1)]))
-            while prod.compare(window) > 0 {
+            // D3: estimate qhat from the top two window limbs. un[j+n] <= vTop
+            // by the loop invariant, so num < 2^64; refine with vNext until
+            // qhat < base and qhat is at most one too large.
+            let num = (UInt64(un[j + n]) << 32) | UInt64(un[j + n - 1])
+            var qhat = num / vTop
+            var rhat = num % vTop
+            while qhat >= base || qhat * vNext > ((rhat << 32) | UInt64(un[j + n - 2])) {
                 qhat -= 1
-                prod = mul(BigUInt(limbs: [UInt32(qhat & 0xFFFF_FFFF), UInt32(qhat >> 32)]), vBig)
+                rhat += vTop
+                if rhat >= base { break }
             }
-            window = sub(window, prod)
-            for i in 0...(n) {
-                un[j + i] = i < window.limbs.count ? window.limbs[i] : 0
+
+            // D4: un[j...j+n] -= qhat * vn. Each difference lies in
+            // [-2^32, 2^32), so a wrapped (negative) result has bit 63 set.
+            var carry: UInt64 = 0, borrow: UInt64 = 0
+            for i in 0..<n {
+                let p = qhat * UInt64(vn[i]) + carry
+                carry = p >> 32
+                let d = UInt64(un[i + j]) &- (p & 0xFFFF_FFFF) &- borrow
+                un[i + j] = UInt32(truncatingIfNeeded: d)
+                borrow = d >> 63
             }
-            q[j] = UInt32(qhat & 0xFFFF_FFFF)
-            assert(qhat <= UInt64(UInt32.max), "quotient digit must fit 32 bits")
+            let top = UInt64(un[j + n]) &- carry &- borrow
+            un[j + n] = UInt32(truncatingIfNeeded: top)
+
+            // D5/D6: went negative -> qhat was one too large; add vn back
+            // (the final carry out cancels the borrow).
+            if top >> 63 != 0 {
+                qhat -= 1
+                var c: UInt64 = 0
+                for i in 0..<n {
+                    let t = UInt64(un[i + j]) + UInt64(vn[i]) + c
+                    un[i + j] = UInt32(truncatingIfNeeded: t)
+                    c = t >> 32
+                }
+                un[j + n] = un[j + n] &+ UInt32(truncatingIfNeeded: c)
+            }
+            q[j] = UInt32(truncatingIfNeeded: qhat)
         }
-        return (BigUInt(limbs: q), BigUInt(limbs: Array(un.prefix(n))))
+
+        // D8: un-normalize the remainder.
+        var r = [UInt32](repeating: 0, count: n)
+        if shift == 0 {
+            for i in 0..<n { r[i] = un[i] }
+        } else {
+            let back = UInt32(32 - shift), sh = UInt32(shift)
+            for i in 0..<n { r[i] = (un[i] >> sh) | (un[i + 1] << back) }
+        }
+        return (BigUInt(limbs: q), BigUInt(limbs: r))
     }
 
     static func modMul(_ a: BigUInt, _ b: BigUInt, _ m: BigUInt) -> BigUInt {
@@ -273,7 +324,8 @@ struct BigUInt: Sendable, Equatable {
 /// - The window count leaks the exponent's normalized 32-bit limb count when
 ///   it exceeds the modulus size (SRP exponents are < 2^2048, so it doesn't).
 /// - `BigUInt.mod(base, n)` before entry is the variable-time Knuth division
-///   (a no-op when base < n, as in SRP); R^2 mod n branches, but on n only.
+///   (a no-op when base < n, as in SRP); R^2 mod n uses the same division,
+///   but depends on n only.
 /// - Everything around modPow in SRP (`modMul`, `mod`, `sub`, `compare`,
 ///   array allocation and normalization) is still the variable-time
 ///   32-bit-limb code.
@@ -303,7 +355,8 @@ private enum Montgomery {
         let t = arena + slots * s
 
         load(modulus, into: n, count: s)
-        squareOfR(n: n, bitLength: modulus.bitLength, s: s, into: rrM)
+        // R^2 mod n with R = 2^(64*s); depends on n only (public).
+        load(BigUInt.mod(BigUInt.one.shl(128 * s), modulus), into: rrM, count: s)
         load(base, into: baseM, count: s)
         one[0] = 1
         let n0inv = negInverse(n[0])
@@ -347,41 +400,6 @@ private enum Montgomery {
             let lo = 2 * i < x.limbs.count ? UInt64(x.limbs[2 * i]) : 0
             let hi = 2 * i + 1 < x.limbs.count ? UInt64(x.limbs[2 * i + 1]) : 0
             dst[i] = lo | (hi << 32)
-        }
-    }
-
-    /// RR = R^2 mod n with R = 2^(64*s), by modular doubling from
-    /// 2^(bitLength-1) < n. Avoids `BigUInt.divmod`, whose quotient-digit
-    /// correction loop degenerates for moduli with a small top limb.
-    /// Depends on n only (public).
-    private static func squareOfR(n: UnsafeMutablePointer<UInt64>, bitLength: Int, s: Int,
-                                  into x: UnsafeMutablePointer<UInt64>) {
-        for j in 0..<s { x[j] = 0 }
-        let top = bitLength - 1
-        x[top / 64] = 1 << UInt64(top % 64)
-        for _ in 0..<(128 * s - top) {
-            // x = 2x (carry-out c), then x -= n iff 2x >= n.
-            var c: UInt64 = 0
-            for j in 0..<s {
-                let v = x[j]
-                x[j] = (v << 1) | c
-                c = v >> 63
-            }
-            // Compare pass (borrow of x - n), then subtract if needed.
-            var borrow: UInt64 = 0
-            for j in 0..<s {
-                let (d1, b1) = x[j].subtractingReportingOverflow(n[j])
-                borrow = bit(b1) | bit(d1.subtractingReportingOverflow(borrow).overflow)
-            }
-            if c == 1 || borrow == 0 {
-                borrow = 0
-                for j in 0..<s {
-                    let (d1, b1) = x[j].subtractingReportingOverflow(n[j])
-                    let (d2, b2) = d1.subtractingReportingOverflow(borrow)
-                    x[j] = d2
-                    borrow = bit(b1) | bit(b2)
-                }
-            }
         }
     }
 

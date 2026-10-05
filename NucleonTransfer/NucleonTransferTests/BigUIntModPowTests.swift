@@ -82,8 +82,8 @@ struct BigUIntModPowTests {
     }
 
     @Test func edgeCases() {
-        // Top limb with its high bit set: the reference's long division is
-        // only fast for normalized divisors (see smallTopLimbKnownAnswers).
+        // Top limb with its high bit set (already normalized divisor);
+        // smallTopLimbKnownAnswers covers the unnormalized case.
         let m = BigUInt(limbs: [0xFFFF_FFFB, 0xFFFF_FFFF, 0x8000_1234]) // odd
         let mMinus1 = BigUInt.sub(m, .one)
         let x = BigUInt(limbs: [0xDEAD_BEEF, 0x0BAD_F00D, 0x77])
@@ -103,9 +103,9 @@ struct BigUIntModPowTests {
         }
     }
 
-    /// Modulus whose top 32-bit limb is small. The pre-F8.3 path takes ~20 s
-    /// (release) here because `divmod` does not normalize the divisor, so the
-    /// expected values come from Python's pow() instead.
+    /// Modulus whose top 32-bit limb is small. Before F8.3-P6 `divmod` did
+    /// not normalize the divisor and the reference took ~20 s here; expected
+    /// values come from Python's pow(), and the reference must agree now too.
     @Test func smallTopLimbKnownAnswers() {
         let m = BigUInt(limbs: [0xFFFF_FFFB, 0xFFFF_FFFF, 0x1234])
         let x = BigUInt(limbs: [0xDEAD_BEEF, 0x0BAD_F00D, 0x77])
@@ -113,6 +113,8 @@ struct BigUIntModPowTests {
         #expect(BigUInt.modPow(x, allOnes, m) == BigUInt(limbs: [0x3452_3DA6, 0x81DF_97A1, 0x355]))
         #expect(BigUInt.modPow(x, x, m) == BigUInt(limbs: [0x7D65_C518, 0x2A5E_B871, 0xCCE]))
         #expect(BigUInt.modPow(BigUInt.sub(m, .one), x, m) == BigUInt.sub(m, .one))
+        #expect(referenceModPow(x, allOnes, m) == BigUInt.modPow(x, allOnes, m))
+        #expect(referenceModPow(x, x, m) == BigUInt.modPow(x, x, m))
     }
 
     /// Even moduli and m == 1 keep the old path (behaviour unchanged).
