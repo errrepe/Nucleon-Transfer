@@ -16,6 +16,9 @@
 // Security scope: the panel URL arrives already started; we still call
 // startAccessing (harmless no-op) and ALWAYS balance it with
 // stopAccessing when the batch ends.
+// F8.4-U6: the transfers popover opens when a batch starts (same as
+// upload intake), and single files report their size so the row can show
+// speed and time left.
 import Foundation
 
 @MainActor
@@ -58,6 +61,9 @@ final class DownloadCoordinator {
         let adapter = DriveDownloadAdapter(
             drive: drive, addressKeys: addressKeys, resolver: resolver
         )
+        // Mirror UploadCoordinator's intake: show the popover so the
+        // user sees the download start (records land as items begin).
+        activity.presentTransfers = true
         for item in items {
             guard batchEpoch == epoch else { return }
             await download(item, with: adapter, to: destination)
@@ -90,7 +96,8 @@ final class DownloadCoordinator {
         let recordID = activity.downloadStarted(
             name: item.name,
             kind: item.isFolder ? .folder : .file,
-            destination: destination
+            destination: destination,
+            bytesTotal: item.isFolder || item.size <= 0 ? nil : item.size
         )
         let task = Task { [activity] in
             await Self.run(

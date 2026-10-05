@@ -4,6 +4,9 @@
 // merged newest-first via TransferDisplay. Pure inputs + closures so the
 // same view renders offline previews; TransfersToolbarButton wires it to
 // the session's UploadCoordinator + TransferActivityStore.
+// F8.4-U6: inset list, section headers with counts ("Failed (3)") and a
+// once-a-second tick while anything is in flight, so speed/ETA refresh
+// (and fade out when a transfer stalls) between progress snapshots.
 import SwiftUI
 
 struct TransfersPanel: View {
@@ -31,14 +34,22 @@ struct TransfersPanel: View {
     let revealURLs: [UUID: URL]
     /// Last intake failure, already user-facing (UploadCoordinator).
     let lastError: String?
+    /// Smoothed rate by item id at a render time (TransferActivityStore);
+    /// nil hides speed/ETA. Defaults to none for previews.
+    var bytesPerSecond: (String, Date) -> Double? = { _, _ in nil }
     var handlers = Handlers()
 
-    private var sections: [TransferDisplaySection] {
+    private func sections(at now: Date) -> [TransferDisplaySection] {
         TransferDisplay.sections(
             uploads: uploads,
             downloads: downloads,
-            destinationName: { destinationNames[$0] }
+            destinationName: { destinationNames[$0] },
+            bytesPerSecond: { bytesPerSecond($0, now) }
         )
+    }
+
+    private var hasActive: Bool {
+        TransferDisplay.activeCount(uploads: uploads, downloads: downloads) > 0
     }
 
     private var canPauseAll: Bool {
@@ -66,6 +77,7 @@ struct TransfersPanel: View {
                     .font(.caption)
                     .foregroundStyle(.red)
                     .lineLimit(2)
+                    .help(lastError)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
@@ -102,6 +114,15 @@ struct TransfersPanel: View {
 
     @ViewBuilder
     private var content: some View {
+        // Paused (no ticks) when idle; one schedule either way so the
+        // list keeps its identity (and scroll position) across the flip.
+        TimelineView(.animation(minimumInterval: 1, paused: !hasActive)) { context in
+            list(sections(at: context.date))
+        }
+    }
+
+    @ViewBuilder
+    private func list(_ sections: [TransferDisplaySection]) -> some View {
         if sections.isEmpty {
             ContentUnavailableView(
                 "No Transfers",
@@ -118,7 +139,7 @@ struct TransfersPanel: View {
                     }
                 }
             }
-            .listStyle(.sidebar)
+            .listStyle(.inset)
         }
     }
 

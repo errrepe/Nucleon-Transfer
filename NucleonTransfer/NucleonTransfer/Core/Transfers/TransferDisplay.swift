@@ -30,12 +30,38 @@ struct TransferDisplayItem: Identifiable, Sendable, Equatable {
     let updatedAt: Date
 }
 
+/// Toolbar badge (F8.4-U6): failures win (red, failed count + glyph);
+/// otherwise the in-flight count in the accent tint; nothing when idle.
+enum TransferBadge: Sendable, Equatable {
+    case none
+    case active(Int)
+    case failed(Int)
+
+    /// VoiceOver / tooltip suffix: "3 active", "2 failed".
+    var summary: String? {
+        switch self {
+        case .none: return nil
+        case let .active(n): return String(localized: "\(n) active")
+        case let .failed(n): return String(localized: "\(n) failed")
+        }
+    }
+}
+
 /// Popover grouping (spec 6.5): only non-empty sections render, always in
 /// this order.
 enum TransferDisplaySectionKind: String, Sendable, Equatable, CaseIterable {
     case active = "Active"
     case failed = "Failed"
     case completed = "Completed"
+
+    /// Localizable header text (the raw value stays a stable id).
+    var title: String {
+        switch self {
+        case .active: return String(localized: "Active")
+        case .failed: return String(localized: "Failed")
+        case .completed: return String(localized: "Completed")
+        }
+    }
 }
 
 struct TransferDisplaySection: Identifiable, Sendable, Equatable {
@@ -43,7 +69,8 @@ struct TransferDisplaySection: Identifiable, Sendable, Equatable {
     let items: [TransferDisplayItem]
 
     var id: String { kind.rawValue }
-    var title: String { kind.rawValue }
+    /// Header with the row count: "Failed (3)" (F8.4-U6).
+    var title: String { "\(kind.title) (\(items.count))" }
 }
 
 enum TransferDisplay {
@@ -52,13 +79,17 @@ enum TransferDisplay {
     /// Upload job → display row. `destinationName` is the breadcrumb
     /// captured at enqueue time ("My Files › Projects"); nil for jobs
     /// restored from disk — the subtitle degrades gracefully.
-    static func item(for job: TransferJob, destinationName: String?) -> TransferDisplayItem {
+    /// `bytesPerSecond` is the smoothed rate (TransferRateBook); nil hides
+    /// speed and ETA.
+    static func item(
+        for job: TransferJob, destinationName: String?, bytesPerSecond: Double? = nil
+    ) -> TransferDisplayItem {
         TransferDisplayItem(
             id: job.id.uuidString,
             direction: .upload,
             name: job.fileName,
             isFolder: false, // folder uploads land as one job per file
-            subtitle: uploadSubtitle(job, destination: destinationName),
+            subtitle: uploadSubtitle(job, destination: destinationName, rate: bytesPerSecond),
             progress: uploadProgress(job),
             isActive: section(of: job) == .active,
             isFailed: job.state == .failed,
@@ -69,13 +100,13 @@ enum TransferDisplay {
     /// Download record → display row. Folder downloads get " (N files)"
     /// appended to the NAME (spec 6.5 wireframe); the subtitle stays
     /// "Downloaded to <destination>".
-    static func item(for record: DownloadRecord) -> TransferDisplayItem {
+    static func item(for record: DownloadRecord, bytesPerSecond: Double? = nil) -> TransferDisplayItem {
         TransferDisplayItem(
             id: record.id.uuidString,
             direction: .download,
             name: downloadName(record),
             isFolder: record.kind == .folder,
-            subtitle: downloadSubtitle(record),
+            subtitle: downloadSubtitle(record, rate: bytesPerSecond),
             progress: record.state == .downloading ? record.progress : nil,
             isActive: record.state == .downloading,
             isFailed: record.state == .failed,
@@ -88,20 +119,24 @@ enum TransferDisplay {
     /// Uploads + downloads merged into Active / Failed / Completed, each
     /// sorted `updatedAt` descending (spec 6.5). `destinationName` resolves
     /// a job's breadcrumb — pass `UploadCoordinator.destinationNames` via a
-    /// closure so this file never touches Features types.
+    /// closure so this file never touches Features types. `bytesPerSecond`
+    /// resolves a smoothed rate by item id (TransferRateBook) the same way.
     static func sections(
         uploads: [TransferJob],
         downloads: [DownloadRecord],
-        destinationName: (UUID) -> String? = { _ in nil }
+        destinationName: (UUID) -> String? = { _ in nil },
+        bytesPerSecond: (String) -> Double? = { _ in nil }
     ) -> [TransferDisplaySection] {
         var grouped: [TransferDisplaySectionKind: [TransferDisplayItem]] = [:]
         for job in uploads {
+            let rate = job.state == .uploading ? bytesPerSecond(job.id.uuidString) : nil
             grouped[section(of: job), default: []]
-                .append(item(for: job, destinationName: destinationName(job.id)))
+                .append(item(for: job, destinationName: destinationName(job.id), bytesPerSecond: rate))
         }
         for record in downloads {
+            let rate = record.state == .downloading ? bytesPerSecond(record.id.uuidString) : nil
             grouped[section(of: record), default: []]
-                .append(item(for: record))
+                .append(item(for: record, bytesPerSecond: rate))
         }
         return TransferDisplaySectionKind.allCases.compactMap { kind in
             guard var items = grouped[kind], !items.isEmpty else { return nil }
@@ -133,14 +168,39 @@ enum TransferDisplay {
             + downloads.filter { $0.state == .downloading }.count
     }
 
+    /// Failed (not cancelled) uploads + downloads.
+    static func failedCount(uploads: [TransferJob], downloads: [DownloadRecord]) -> Int {
+        uploads.filter { $0.state == .failed }.count
+            + downloads.filter { $0.state == .failed }.count
+    }
+
+    /// Toolbar badge state: red only when something actually failed.
+    static func badge(uploads: [TransferJob], downloads: [DownloadRecord]) -> TransferBadge {
+        let failed = failedCount(uploads: uploads, downloads: downloads)
+        if failed > 0 { return .failed(failed) }
+        let active = activeCount(uploads: uploads, downloads: downloads)
+        return active > 0 ? .active(active) : .none
+    }
+
     // MARK: - subtitles
 
-    private static func uploadSubtitle(_ job: TransferJob, destination: String?) -> String {
+    private static func uploadSubtitle(
+        _ job: TransferJob, destination: String?, rate: Double?
+    ) -> String {
         switch job.state {
         case .queued:
             return "Waiting…"
         case .uploading:
-            var text = "\(bytes(job.bytesDone)) of \(bytes(job.bytesTotal))"
+            // F8.4-U6: "42% · 3.2 MB/s · 1 min left" once the rate has
+            // warmed up; until then percent + byte counts + destination.
+            if let rate {
+                return TransferRateText.progressLine(
+                    fraction: job.progress, done: job.bytesDone,
+                    total: job.bytesTotal, bytesPerSecond: rate
+                )
+            }
+            var text = TransferRateText.percent(job.progress)
+                + " · \(bytes(job.bytesDone)) of \(bytes(job.bytesTotal))"
             if let destination, !destination.isEmpty {
                 text += " · to \(destination)"
             }
@@ -179,11 +239,17 @@ enum TransferDisplay {
         return "\(record.name) (\(record.fileCount) \(noun))"
     }
 
-    private static func downloadSubtitle(_ record: DownloadRecord) -> String {
+    private static func downloadSubtitle(_ record: DownloadRecord, rate: Double?) -> String {
         switch record.state {
         case .downloading:
             if let progress = record.progress {
-                return "Downloading… \(Int((progress * 100).rounded()))%"
+                if let rate {
+                    return TransferRateText.progressLine(
+                        fraction: progress, done: record.bytesDone,
+                        total: record.bytesTotal, bytesPerSecond: rate
+                    )
+                }
+                return "Downloading… \(TransferRateText.percent(progress))"
             }
             return record.kind == .folder ? "Downloading folder…" : "Downloading…"
         case .done:
