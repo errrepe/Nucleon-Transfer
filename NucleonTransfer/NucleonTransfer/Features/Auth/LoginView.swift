@@ -127,7 +127,9 @@ struct LoginView: View {
                 .transition(.opacity)
             }
             Button(action: signIn) {
-                Group {
+                // ZStack, not Group: mid-crossfade both labels overlap
+                // instead of stacking and growing the button.
+                ZStack {
                     if isSigningIn {
                         HStack(spacing: 6) {
                             ProgressView()

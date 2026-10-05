@@ -198,19 +198,27 @@ struct FolderView: View {
             items: items, location: location, model: model, hover: hover,
             columnCustomization: $columnCustomization
         )
+            // Banner/path-bar animations wrap this stack; a refresh that
+            // swaps the rows in the same update (Try Again on the
+            // "Couldn't refresh" banner) must not animate a 5k-row diff.
+            .transaction { $0.animation = nil }
             .overlay {
                 stateOverlay
                     .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: overlayState)
             }
             .overlay {
-                if isTargeted {
-                    HoveredDropOverlay(hover: hover, fallback: location)
-                        .transition(
-                            reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 1.02))
-                        )
+                // The animation sits inside the overlay so it never reaches
+                // the table's rows (see FolderTable's transaction below).
+                ZStack {
+                    if isTargeted {
+                        HoveredDropOverlay(hover: hover, fallback: location)
+                            .transition(
+                                reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 1.02))
+                            )
+                    }
                 }
+                .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: isTargeted)
             }
-            .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: isTargeted)
         if model.root.allowsWrites {
             // F8.4-U1: drops stay accepted while uploads are blocked — a
             // refused drag gave no feedback; BrowserModel.upload brings

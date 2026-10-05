@@ -23,6 +23,7 @@ struct TransfersToolbarButton: View {
     /// object injected outside the NavigationStack can be missing
     /// (crash B1: EnvironmentValues assert on a background-hosted item).
     let session: AppSession
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var badgeState: TransferBadge {
         TransferDisplay.badge(
@@ -38,7 +39,7 @@ struct TransfersToolbarButton: View {
         } label: {
             Label("Transfers", systemImage: "arrow.up.arrow.down")
                 .symbolEffect(.pulse, options: .repeating, isActive: isInFlight)
-                .symbolEffect(.bounce, value: failedCount)
+                .symbolEffect(.bounce, value: reduceMotion ? 0 : failedCount)
         }
         // 0 hides the badge.
         .badge(failedCount)

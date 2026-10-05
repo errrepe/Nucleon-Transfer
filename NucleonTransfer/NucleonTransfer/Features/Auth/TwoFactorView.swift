@@ -31,17 +31,15 @@ struct TwoFactorView: View {
             Image(systemName: "lock.shield")
                 .font(.system(size: 40))
                 .foregroundStyle(.tint)
-                .symbolEffect(.bounce, value: appeared)
+                .symbolEffect(.bounce, value: reduceMotion ? false : appeared)
                 .accessibilityHidden(true)
             Text("Two-Factor Authentication")
                 .font(.title2.weight(.semibold))
-            Group {
-                if isRecovery {
-                    Text("Enter one of the recovery codes you saved when you turned on two-factor authentication. Each code works only once.")
-                } else {
-                    Text("Enter the 6-digit code from your authenticator app.")
-                }
-            }
+            // One Text value (not an if/else of two) so the copy crossfades
+            // in place instead of both versions stacking mid-transition.
+            (isRecovery
+                ? Text("Enter one of the recovery codes you saved when you turned on two-factor authentication. Each code works only once.")
+                : Text("Enter the 6-digit code from your authenticator app."))
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
@@ -99,8 +97,11 @@ struct TwoFactorView: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(!TwoFactorCodeInput.isComplete(code, mode: mode) || isVerifying)
             }
-            Button(isRecovery ? "Use authenticator code instead" : "Use a recovery code instead") {
+            Button {
                 switchMode()
+            } label: {
+                (isRecovery ? Text("Use authenticator code instead") : Text("Use a recovery code instead"))
+                    .contentTransition(.opacity)
             }
             .buttonStyle(.link)
             .font(.callout)

@@ -8,9 +8,9 @@
 // Details…" (alert with Copy); failure/cancellation carry an SF Symbol
 // beside the subtitle (never color alone); VoiceOver reads each row as ONE
 // element (name + status) whose buttons are exposed as named actions.
-// Polish pass: the progress bar glides between snapshots, the status
-// glyph bounces in when a transfer fails, and Pause/Resume is one button
-// whose symbol morphs (replace effect) instead of swapping controls.
+// Polish pass: the progress bar glides between snapshots and Pause/Resume
+// is one button whose symbol morphs (replace effect) instead of swapping
+// controls.
 import AppKit
 import SwiftUI
 
@@ -50,7 +50,6 @@ struct TransferRow: View {
                     if let symbol = item.statusSymbol {
                         Image(systemName: symbol)
                             .imageScale(.small)
-                            .symbolEffect(.bounce, value: symbol)
                             .transition(.symbolEffect(.appear))
                     }
                     Text(item.subtitle)

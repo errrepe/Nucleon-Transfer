@@ -133,7 +133,10 @@ struct TransfersPanel: View {
             // Animate membership changes only — not every 1 s tick.
             .animation(
                 Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion),
-                value: sections.map { $0.items.map(\.id) }
+                // Membership per section, order-free: Active is sorted by
+                // updatedAt, which moves on every job start — keying on
+                // display order would shuffle rows during a big upload.
+                value: sections.map { Set($0.items.map(\.id)) }
             )
     }
 
