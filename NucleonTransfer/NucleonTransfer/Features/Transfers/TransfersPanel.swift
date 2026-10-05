@@ -83,7 +83,7 @@ struct TransfersPanel: View {
                     .padding(.vertical, 6)
             }
         }
-        .frame(width: 380, height: 440)
+        .frame(width: 380, height: 440, alignment: .top)
     }
 
     private var header: some View {
@@ -119,6 +119,10 @@ struct TransfersPanel: View {
         TimelineView(.animation(minimumInterval: 1, paused: !hasActive)) { context in
             list(sections(at: context.date))
         }
+        // Fill the panel below the header: the empty state doesn't grow on
+        // its own, and a shorter stack would sit centered in the fixed
+        // frame with blank bands above the header and below the content.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder

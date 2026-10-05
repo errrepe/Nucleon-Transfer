@@ -9,7 +9,7 @@
 // Mac — AccountSettingsView.
 // About: icon, name, version + build, the 6.6 disclaimer, source link.
 // U7 layout: no fixed frame (clipped at larger text sizes) — each grouped
-// Form sizes itself vertically; only a minimum width is set.
+// Form sizes itself vertically; the width is fixed at 460 pt.
 import AppKit
 import SwiftUI
 
@@ -51,7 +51,10 @@ struct SettingsView: View {
             aboutTab
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(minWidth: 460)
+        // Fixed width (System Settings-style panes): a min-only width let
+        // the window stretch, and the grouped forms stretched with it.
+        // Height stays free per tab (larger text sizes grow it).
+        .frame(width: 460)
     }
 
     private var generalTab: some View {
