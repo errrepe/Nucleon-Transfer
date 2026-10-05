@@ -143,6 +143,14 @@ final class BrowserModel {
         session.uploads?.uploadsBlockedBannerDismissed = true
     }
 
+    /// An upload attempt while blocked — the banner explains why.
+    private func reshowUploadsBlockedBanner() {
+        #if DEBUG
+        if previewUploadsBlocked != nil { previewBannerDismissed = false; return }
+        #endif
+        session.uploads?.uploadsBlockedBannerDismissed = false
+    }
+
     /// The session this browser belongs to — also re-injected into the
     /// environment by BrowserContainerView so children (e.g. the S3.2
     /// transfers button) see the same instance, previews included.
@@ -410,6 +418,13 @@ final class BrowserModel {
     /// root › row. Guards read-only roots so a stray drop on Photos
     /// never reaches the queue.
     func upload(urls: [URL], to destination: DriveLocation) async {
+        // A drop while Proton blocks uploads is still accepted (a refused
+        // drag gave no feedback at all — live check): it brings the
+        // dismissed banner back so the reason is on screen.
+        if root.allowsWrites, uploadsBlocked {
+            reshowUploadsBlockedBanner()
+            return
+        }
         guard canUpload, !urls.isEmpty, let uploads = session.uploads else { return }
         let breadcrumb = ancestors(of: destination).map(\.name).joined(separator: " › ")
         await uploads.upload(urls: urls, to: destination, breadcrumb: breadcrumb)

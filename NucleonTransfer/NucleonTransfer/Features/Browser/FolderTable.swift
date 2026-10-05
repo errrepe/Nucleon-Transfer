@@ -126,7 +126,7 @@ struct FolderTable: View {
             .customizationID("size")
         } rows: {
             ForEach(items) { item in
-                if item.isFolder && model.canUpload {
+                if item.isFolder && model.root.allowsWrites {
                     TableRow(item)
                         .onHover { hover.track(item, hovering: $0) }
                         // B10: a drop on this row uploads into THAT
@@ -145,8 +145,10 @@ struct FolderTable: View {
             // so FolderView's table-level .onDrop never saw a drop on file
             // rows or the empty area. An insertion drop (between rows /
             // below the last) uploads into the open folder instead.
+            // Drops stay accepted while Proton blocks uploads —
+            // BrowserModel.upload re-shows the banner instead.
             .dropDestination(for: URL.self) { _, urls in
-                guard model.canUpload else { return }
+                guard model.root.allowsWrites else { return }
                 Task { await model.upload(urls: urls, to: location) }
             }
         }

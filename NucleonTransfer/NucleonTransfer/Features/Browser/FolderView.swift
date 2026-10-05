@@ -188,10 +188,10 @@ struct FolderView: View {
                 }
             }
         if model.root.allowsWrites {
-            // F8.4-U1: while uploads are blocked the drop accepts no
-            // types (no highlight, refused) — same view structure, so the
-            // table keeps its selection and scroll position.
-            table.onDrop(of: model.uploadsBlocked ? [] : [.fileURL], isTargeted: $isTargeted) { providers in
+            // F8.4-U1: drops stay accepted while uploads are blocked — a
+            // refused drag gave no feedback; BrowserModel.upload brings
+            // the banner back instead.
+            table.onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
                 Task {
                     let urls = await UploadCoordinator.droppedFileURLs(providers)
                     await model.upload(urls: urls, to: location)
