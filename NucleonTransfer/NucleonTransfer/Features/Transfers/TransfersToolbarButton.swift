@@ -12,6 +12,8 @@
 // counts (F8.4-U6 — never color or motion alone). Upload speed
 // samples come from UploadCoordinator's snapshot listener (F8.4-U7b), not
 // from this view.
+// Polish pass: the icon bounces once whenever the failed count changes,
+// so the badge change is noticed without a persistent animation.
 import AppKit
 import SwiftUI
 
@@ -36,6 +38,7 @@ struct TransfersToolbarButton: View {
         } label: {
             Label("Transfers", systemImage: "arrow.up.arrow.down")
                 .symbolEffect(.pulse, options: .repeating, isActive: isInFlight)
+                .symbolEffect(.bounce, value: failedCount)
         }
         // 0 hides the badge.
         .badge(failedCount)

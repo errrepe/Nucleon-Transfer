@@ -7,6 +7,8 @@
 // in the folder come in as `existingNames` and fail validation before any
 // request goes out. Errors stay inline (the sheet remains open so the
 // name can be fixed); only a successful create dismisses.
+// Polish pass: the inline error eases in/out and shakes the field when
+// Create is refused, the spinner fades in beside the buttons.
 import AppKit // NSApp.sendAction(selectAll:) — preselects the default name
 import SwiftUI
 
@@ -26,6 +28,9 @@ struct NewFolderSheet: View {
     @State private var edited = false
     @State private var isCreating = false
     @FocusState private var nameFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Bumped when a create is refused (invalid name or server error).
+    @State private var shakeCount = 0
 
     init(
         initialName: String = String(localized: "Untitled Folder", comment: "Default name of a new folder"),
@@ -76,17 +81,20 @@ struct NewFolderSheet: View {
                     error = nil // typing clears a stale server error
                 }
                 .accessibilityLabel("Folder name")
+                .shake(trigger: shakeCount)
             if let inlineError {
                 Text(inlineError)
                     .font(.caption)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
+                    .transition(Motion.inline(reduceMotion: reduceMotion))
             }
             HStack {
                 Spacer()
                 if isCreating {
                     ProgressView()
                         .controlSize(.small)
+                        .transition(.opacity)
                 }
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -96,6 +104,8 @@ struct NewFolderSheet: View {
                     .disabled(!isValid || isCreating)
             }
         }
+        .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: inlineError)
+        .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: isCreating)
         .padding(20)
         .frame(width: 340)
         .task {
@@ -109,6 +119,7 @@ struct NewFolderSheet: View {
     private func create() async {
         guard case let .success(validName) = validation else {
             edited = true
+            refuse()
             return
         }
         isCreating = true
@@ -118,7 +129,14 @@ struct NewFolderSheet: View {
             dismiss()
         } catch {
             self.error = UserFacingError.message(for: error)
+            refuse()
         }
+    }
+
+    /// Create didn't go through — nudge the field (skipped under Reduce
+    /// Motion; the red inline message carries the meaning either way).
+    private func refuse() {
+        if !reduceMotion { shakeCount += 1 }
     }
 }
 

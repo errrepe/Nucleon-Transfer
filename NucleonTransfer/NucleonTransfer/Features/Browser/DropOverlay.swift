@@ -2,7 +2,8 @@
 // Drawn while a file drag hovers over a writable folder: tint stroke +
 // 6% accent wash + a regular-material capsule naming the destination.
 // Purely decorative — hit testing is off so the drop still lands on the
-// table underneath.
+// table underneath. Polish pass: the capsule's destination name
+// crossfades as the drag crosses folder rows instead of snapping.
 import SwiftUI
 
 struct DropOverlay: View {
@@ -22,6 +23,8 @@ struct DropOverlay: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(.regularMaterial, in: Capsule())
+                    .contentTransition(.opacity)
+                    .animation(.snappy(duration: 0.2), value: location)
             }
             .allowsHitTesting(false)
             .accessibilityHidden(true)

@@ -6,38 +6,45 @@
 // The `.task` kicks off that restore when "Keep me signed in" stored one
 // (no-op otherwise, and for the demo session) — once per app launch:
 // reopening the window doesn't restore again (AppSession.restoreOnLaunch).
+// Polish pass: the crossfade gained a slight settle-in scale and a smooth
+// spring (plain crossfade under Reduce Motion — see Motion).
 import SwiftUI
 
 struct RootView: View {
     @Environment(AppSession.self) private var session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
             switch session.phase {
             case .signedIn:
                 MainView()
-                    .transition(.opacity)
+                    .transition(phaseTransition)
             case .signedOut, .signingIn:
                 LoginView()
-                    .transition(.opacity)
+                    .transition(phaseTransition)
             case .needsTwoFactor:
                 TwoFactorView()
-                    .transition(.opacity)
+                    .transition(phaseTransition)
             case .unlocking:
                 UnlockingView()
-                    .transition(.opacity)
+                    .transition(phaseTransition)
             case .restoring:
                 RestoringView()
-                    .transition(.opacity)
+                    .transition(phaseTransition)
             }
         }
         .task {
             await session.restoreOnLaunch()
         }
-        .animation(.easeInOut(duration: 0.2), value: session.phase)
+        .animation(Motion.adaptive(Motion.smooth, reduceMotion: reduceMotion), value: session.phase)
         // S4.2: publish the session for app-level menu commands (Sign
         // Out, Show Transfers) — they must work even where no BrowserModel
         // is on screen (e.g. the root-load error state).
         .focusedSceneValue(\.appSession, session)
+    }
+
+    private var phaseTransition: AnyTransition {
+        Motion.phase(reduceMotion: reduceMotion)
     }
 }

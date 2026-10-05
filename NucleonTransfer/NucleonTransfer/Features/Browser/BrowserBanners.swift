@@ -62,10 +62,16 @@ struct UploadsBlockedBanner: View {
             if let url = UploadsBlockedCopy.learnMoreURL {
                 Link("Learn More", destination: url)
             }
-            Button("Dismiss", systemImage: "xmark", action: onDismiss)
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .help("Dismiss")
+            Button(action: onDismiss) {
+                // The bare glyph was an 8-pt hit target (live audit) —
+                // the padded label is what a borderless button hit-tests.
+                Image(systemName: "xmark")
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss")
         }
         .accessibilityElement(children: .contain)
     }

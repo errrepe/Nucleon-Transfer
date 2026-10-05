@@ -18,6 +18,9 @@
 // Back/Forward sit in the navigation area; a failed refresh over cached
 // rows shows the "Couldn't refresh" banner; the subtitle counts the
 // selection.
+// Polish pass: banners slide in under the toolbar, the overlay states
+// crossfade, the spinner waits a beat before showing (no flash on fast
+// loads) and the subtitle stays blank until there is a count to show.
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -46,6 +49,7 @@ struct FolderView: View {
     /// View ▸ Show Path Bar (⌥⌘P) — drawn per folder view, so pushed
     /// folders show it too.
     @AppStorage(BrowserPreferences.showPathBarKey) private var showPathBar = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// This folder's store — observed per folder (F8.3-P3).
     private var state: FolderStore { model.state(for: location) }
@@ -63,8 +67,11 @@ struct FolderView: View {
             tableWithUploadDrop
             if showPathBar {
                 PathBar(model: model, location: location)
+                    .transition(.opacity)
             }
         }
+            .animation(Motion.adaptive(Motion.smooth, reduceMotion: reduceMotion), value: bannerState)
+            .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: showPathBar)
             // The topmost FolderView owns the toolbar, so the filter field
             // is declared here (a stack-level .searchable never showed).
             .searchable(
@@ -158,12 +165,22 @@ struct FolderView: View {
         }
         if model.showsUploadsBlockedBanner {
             UploadsBlockedBanner { model.dismissUploadsBlockedBanner() }
+                .transition(Motion.banner(reduceMotion: reduceMotion))
         }
         if case .failed(let message) = state.phase, !state.items.isEmpty {
             RefreshFailedBanner(message: message) {
                 Task { await model.load(location, force: true) }
             }
+            .transition(Motion.banner(reduceMotion: reduceMotion))
         }
+    }
+
+    /// What the animated banners depend on — one value, so the stack
+    /// animates only when a banner comes or goes.
+    private var bannerState: [Bool] {
+        var refreshFailed = false
+        if case .failed = state.phase, !state.items.isEmpty { refreshFailed = true }
+        return [model.showsUploadsBlockedBanner, refreshFailed]
     }
 
     /// The listing with the S3.1 drop-to-upload wiring. On read-only
@@ -181,12 +198,19 @@ struct FolderView: View {
             items: items, location: location, model: model, hover: hover,
             columnCustomization: $columnCustomization
         )
-            .overlay { stateOverlay }
+            .overlay {
+                stateOverlay
+                    .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: overlayState)
+            }
             .overlay {
                 if isTargeted {
                     HoveredDropOverlay(hover: hover, fallback: location)
+                        .transition(
+                            reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 1.02))
+                        )
                 }
             }
+            .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: isTargeted)
         if model.root.allowsWrites {
             // F8.4-U1: drops stay accepted while uploads are blocked — a
             // refused drag gave no feedback; BrowserModel.upload brings
@@ -210,8 +234,9 @@ struct FolderView: View {
     private var stateOverlay: some View {
         switch state.phase {
         case .loading where state.items.isEmpty:
-            ProgressView("Loading…")
+            DelayedProgressView(title: "Loading…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity)
         case .failed(let message) where state.items.isEmpty:
             ContentUnavailableView {
                 Label("Couldn't Load Folder", systemImage: "exclamationmark.triangle")
@@ -222,6 +247,7 @@ struct FolderView: View {
                     Task { await model.load(location, force: true) }
                 }
             }
+            .transition(overlayTransition)
         case .loaded where state.items.isEmpty:
             // B3: the copy follows the root. Photos is read-only, so it
             // must not invite uploads; a non-writable non-Photos root
@@ -234,25 +260,49 @@ struct FolderView: View {
                     systemImage: "photo.on.rectangle",
                     description: Text("Photos you add in Proton Drive appear here.")
                 )
+                .transition(overlayTransition)
             } else if model.root.allowsWrites {
                 ContentUnavailableView(
                     "This Folder Is Empty",
                     systemImage: "folder",
                     description: Text("Drop files here or use Upload.")
                 )
+                .transition(overlayTransition)
             } else {
                 ContentUnavailableView("This Folder Is Empty", systemImage: "folder")
+                    .transition(overlayTransition)
             }
         case _ where items.isEmpty && isFiltering:
             ContentUnavailableView.search(text: model.filterText)
+                .transition(.opacity)
         default:
             EmptyView()
         }
     }
 
+    /// Which overlay state is up — drives its crossfade. The search text
+    /// is left out so typing doesn't re-animate the "No Results" view.
+    private var overlayState: Int {
+        switch state.phase {
+        case .loading where state.items.isEmpty: 1
+        case .failed where state.items.isEmpty: 2
+        case .loaded where state.items.isEmpty: 3
+        case _ where items.isEmpty && isFiltering: 4
+        default: 0
+        }
+    }
+
+    /// Empty/error states rise slightly into place.
+    private var overlayTransition: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.96))
+    }
+
     /// "2 of 14 selected" / "14 items" (F8.4-U3). Counts selected rows
-    /// among the visible ones, so a filter never yields "3 of 2".
+    /// among the visible ones, so a filter never yields "3 of 2". Blank
+    /// while the first load runs or failed — "0 items" over a spinner or
+    /// an error read as an empty folder (live audit).
     private var subtitle: String {
+        if state.items.isEmpty, state.phase != .loaded { return "" }
         let selection = model.selection
         let selected = selection.isEmpty ? 0 : items.lazy.filter { selection.contains($0.id) }.count
         return DriveFormatting.subtitle(selected: selected, total: items.count)

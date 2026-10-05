@@ -7,10 +7,12 @@
 // F8.4-U4: the sidebar selection lives in @SceneStorage (SidebarItem's
 // string form), read directly by the binding so the first frame already
 // shows the restored root; a vanished share falls back to the first root.
+// Polish pass: loading → split view / error crossfades.
 import SwiftUI
 
 struct MainView: View {
     @Environment(AppSession.self) private var session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// SidebarItem.storageValue; "" = nothing selected.
     @SceneStorage(BrowserPreferences.sidebarSelectionKey)
     private var storedSelection = SidebarItem.myFiles.storageValue
@@ -35,10 +37,13 @@ struct MainView: View {
                 } actions: {
                     Button("Try Again") { Task { await session.loadRoots() } }
                 }
+                .transition(.opacity)
             } else {
-                ProgressView("Loading your drive…")
+                DelayedProgressView(title: "Loading your drive…")
+                    .transition(.opacity)
             }
         }
+        .animation(Motion.adaptive(Motion.smooth, reduceMotion: reduceMotion), value: rootsState)
         .frame(minWidth: 800, minHeight: 500)
     }
 
@@ -65,6 +70,12 @@ struct MainView: View {
                 )
             }
         }
+    }
+
+    /// 0 loading, 1 loaded, 2 failed — what the crossfade keys on.
+    private var rootsState: Int {
+        if session.roots != nil { return 1 }
+        return session.rootsError == nil ? 0 : 2
     }
 
     /// The root for the sidebar selection, or nil when nothing is selected

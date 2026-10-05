@@ -7,6 +7,8 @@
 // F8.4-U6: inset list, section headers with counts ("Failed (3)") and a
 // once-a-second tick while anything is in flight, so speed/ETA refresh
 // (and fade out when a transfer stalls) between progress snapshots.
+// Polish pass: rows animate as they move between sections or leave
+// ("Clear Finished"), and the empty state crossfades with the list.
 import SwiftUI
 
 struct TransfersPanel: View {
@@ -38,6 +40,7 @@ struct TransfersPanel: View {
     /// nil hides speed/ETA. Defaults to none for previews.
     var bytesPerSecond: (String, Date) -> Double? = { _, _ in nil }
     var handlers = Handlers()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private func sections(at now: Date) -> [TransferDisplaySection] {
         TransferDisplay.sections(
@@ -125,14 +128,24 @@ struct TransfersPanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    @ViewBuilder
     private func list(_ sections: [TransferDisplaySection]) -> some View {
+        listContent(sections)
+            // Animate membership changes only — not every 1 s tick.
+            .animation(
+                Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion),
+                value: sections.map { $0.items.map(\.id) }
+            )
+    }
+
+    @ViewBuilder
+    private func listContent(_ sections: [TransferDisplaySection]) -> some View {
         if sections.isEmpty {
             ContentUnavailableView(
                 "No Transfers",
                 systemImage: "arrow.up.arrow.down",
                 description: Text("Files you upload or download appear here.")
             )
+            .transition(.opacity)
         } else {
             List {
                 ForEach(sections) { section in
@@ -144,6 +157,7 @@ struct TransfersPanel: View {
                 }
             }
             .listStyle(.inset)
+            .transition(.opacity)
         }
     }
 

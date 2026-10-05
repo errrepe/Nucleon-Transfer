@@ -8,6 +8,9 @@
 // Details…" (alert with Copy); failure/cancellation carry an SF Symbol
 // beside the subtitle (never color alone); VoiceOver reads each row as ONE
 // element (name + status) whose buttons are exposed as named actions.
+// Polish pass: the progress bar glides between snapshots, the status
+// glyph bounces in when a transfer fails, and Pause/Resume is one button
+// whose symbol morphs (replace effect) instead of swapping controls.
 import AppKit
 import SwiftUI
 
@@ -28,6 +31,7 @@ struct TransferRow: View {
     let item: TransferDisplayItem
     var actions = TransferRowActions()
     @State private var showDetails = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -46,6 +50,8 @@ struct TransferRow: View {
                     if let symbol = item.statusSymbol {
                         Image(systemName: symbol)
                             .imageScale(.small)
+                            .symbolEffect(.bounce, value: symbol)
+                            .transition(.symbolEffect(.appear))
                     }
                     Text(item.subtitle)
                         .lineLimit(2)
@@ -58,10 +64,15 @@ struct TransferRow: View {
                 if let progress = item.progress {
                     ProgressView(value: progress)
                         .controlSize(.small)
+                        // Snapshots land in steps; ease between them.
+                        .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: progress)
                         .accessibilityLabel("\(item.name) progress")
                         .accessibilityValue(item.progressText ?? "")
+                        .transition(.opacity)
                 }
             }
+            .animation(reduceMotion ? nil : Motion.snappy, value: item.statusSymbol)
+            .animation(reduceMotion ? nil : Motion.snappy, value: item.progress == nil)
             Spacer(minLength: 4)
             actionButtons
         }
@@ -110,11 +121,16 @@ struct TransferRow: View {
     @ViewBuilder
     private var actionButtons: some View {
         // Spec-6.2 glyphs; order matches the wireframe (⏸ ✕ · ↻ ✕ · 🔍).
-        if let pause = actions.pause {
-            rowButton("Pause", systemImage: "pause.circle", action: pause)
-        }
-        if let resume = actions.resume {
-            rowButton("Resume", systemImage: "play.circle", action: resume)
+        // Pause ⇄ Resume is ONE button (stable identity) so the glyph
+        // morphs instead of one control replacing another.
+        if let toggle = actions.resume ?? actions.pause {
+            let paused = actions.resume != nil
+            rowButton(
+                paused ? "Resume" : "Pause",
+                systemImage: paused ? "play.circle" : "pause.circle",
+                action: toggle
+            )
+            .contentTransition(.symbolEffect(.replace))
         }
         if let retry = actions.retry {
             rowButton("Retry", systemImage: "arrow.clockwise.circle", action: retry)

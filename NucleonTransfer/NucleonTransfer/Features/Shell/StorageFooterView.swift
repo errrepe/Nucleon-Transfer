@@ -2,12 +2,18 @@
 // Quota bar tint escalates with occupancy (accent → orange → red) and hides
 // entirely when the account has no quota. The account menu is always rendered
 // so Sign Out stays reachable even if /users failed.
+// Polish pass: the quota bar fills from empty when the sidebar first
+// appears and eases to new values after uploads/trash (static under
+// Reduce Motion).
 import SwiftUI
 
 struct StorageFooterView: View {
     @Environment(AppSession.self) private var session
     @State private var showSignOutConfirm = false
     @State private var hasActiveTransfers = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// False until the footer is on screen — the gauge fills from zero.
+    @State private var gaugeFilled = false
 
     /// used/max byte counts for the quota bar; nil when the account
     /// reports no quota (bar hidden, text still renders).
@@ -40,11 +46,13 @@ struct StorageFooterView: View {
                 // M2: linearCapacity paints a filled track — far higher
                 // contrast than ProgressView's thin line in dark mode
                 // (the QA complaint). The occupancy tint is unchanged.
-                Gauge(value: Double(quota.used), in: 0...Double(quota.max)) {
+                Gauge(value: gaugeFilled ? Double(quota.used) : 0, in: 0...Double(quota.max)) {
                     EmptyView()
                 }
                 .gaugeStyle(.linearCapacity)
                 .tint(quotaTint(for: Double(quota.used) / Double(quota.max)))
+                .animation(reduceMotion ? nil : .smooth(duration: 0.8), value: gaugeFilled ? quota.used : 0)
+                .onAppear { gaugeFilled = true }
                 // F8.4-U8: the label is visually empty — name it for
                 // VoiceOver and read the same "used of total" text.
                 .accessibilityLabel("Storage")
