@@ -117,6 +117,21 @@ maxAttempts por bloco = 5, por job = persistente com contador
 
 - 429: respeita `Retry-After` se presente.
 - HV 9001: pausa fila inteira, surface UI, resume manual.
+- F8.2-R3 (implementado): `APIClient` preserva o status HTTP de 408/429/5xx
+  mesmo com envelope Proton no corpo (`ProtonAPIError.http(status:code:message:retryAfter:)`;
+  exceções: 9001 e 2028 em `/auth/`) e captura `Retry-After` (segundos ou
+  HTTP-date). A fila classifica pelo status (408/429/5xx transitórios) e
+  espera `max(backoff, Retry-After)` (Retry-After limitado a 5 min) + jitter.
+  Cancelamento (`CancellationError`, `URLError.cancelled`, inclusive
+  embrulhado em `.transport`) nunca é falha (F8.2-R1).
+- Drafts (F8.2-R3): cada job tem um `ClientUID` persistido, enviado no
+  draft (`ClientUID`, SDK C# `FileCreationRequest.cs`). Antes de criar o
+  draft, e mais uma vez após um 2500, o probe `checkAvailableHashes` é
+  comparado com o `ClientUID` (ou com o `draftLinkID` persistido por uma
+  tentativa anterior); drafts nossos são apagados via `delete_multiple`
+  no pai (Proton-API-Bridge `handleRevisionConflict`). Drafts de outros
+  clientes nunca são tocados. Falha após o draft existir apaga o draft
+  (best-effort, task não-cancelada).
 
 ## 4. Progresso / Pausa / Cancela / Retry
 

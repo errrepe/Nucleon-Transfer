@@ -28,6 +28,14 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
         job: TransferJob,
         progress: @Sendable (Int64) async -> Void
     ) async throws -> String? {
+        try await upload(job: job, progress: progress, events: TransferUploadEvents())
+    }
+
+    func upload(
+        job: TransferJob,
+        progress: @Sendable (Int64) async -> Void,
+        events: TransferUploadEvents
+    ) async throws -> String? {
         let url = try localFileURL(for: job)
         let data: Data
         do {
@@ -51,7 +59,10 @@ actor DriveUploadAdapter: TransferUploader, RemoteFolderCreator {
             addressID: parent.addressID,
             signatureAddress: parent.signatureEmail,
             signatureEmail: parent.signatureEmail,
-            modificationTime: mtime
+            modificationTime: mtime,
+            clientUID: job.clientUID,
+            knownDraftLinkID: job.draftLinkID,
+            onDraftCreated: events.draftCreated
         )
         await progress(Int64(data.count))
         return done.linkID

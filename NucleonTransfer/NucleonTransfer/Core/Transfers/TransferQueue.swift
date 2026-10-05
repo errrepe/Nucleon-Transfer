@@ -49,11 +49,19 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
     var updatedAt: Date
     /// Remote LinkID after a successful upload.
     var remoteLinkID: String?
+    /// Per-job ClientUID sent with the file draft (F8.2-R3): lets a retry
+    /// recognise its own stale draft in checkAvailableHashes' PendingHashes.
+    var clientUID: String?
+    /// Draft LinkID/RevisionID of the attempt in progress (persisted as soon
+    /// as the draft exists; cleared on success) — a relaunch deletes it.
+    var draftLinkID: String?
+    var draftRevisionID: String?
 
     enum CodingKeys: String, CodingKey {
         case id, fileName, relativePath, localPath, localBookmark, shareID,
              parentLinkID, state, bytesTotal, bytesDone, attempt, maxAttempts,
-             errorMessage, createdAt, updatedAt, remoteLinkID
+             errorMessage, createdAt, updatedAt, remoteLinkID,
+             clientUID, draftLinkID, draftRevisionID
     }
 
     /// Tolerant decode (F8.2-R2): only the identity/destination fields are
@@ -79,6 +87,9 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
         createdAt = (try? c.decodeIfPresent(Date.self, forKey: .createdAt)) ?? Date()
         updatedAt = (try? c.decodeIfPresent(Date.self, forKey: .updatedAt)) ?? Date()
         remoteLinkID = try c.decodeIfPresent(String.self, forKey: .remoteLinkID)
+        clientUID = try c.decodeIfPresent(String.self, forKey: .clientUID)
+        draftLinkID = try c.decodeIfPresent(String.self, forKey: .draftLinkID)
+        draftRevisionID = try c.decodeIfPresent(String.self, forKey: .draftRevisionID)
     }
 
     var progress: Double {
@@ -111,6 +122,7 @@ struct TransferJob: Codable, Sendable, Identifiable, Equatable {
         self.maxAttempts = maxAttempts
         createdAt = Date()
         updatedAt = Date()
+        clientUID = UUID().uuidString
     }
 }
 
@@ -149,6 +161,12 @@ enum TransferErrorClassify {
                     return .transient("api \(code): \(message)")
                 }
                 return .permanent("api \(code): \(message)")
+            case let .http(status, _, message, _):
+                // F8.2-R3: classify on the HTTP status (storage + API).
+                if APIClient.isRetryableStatus(status) {
+                    return .transient("http \(status): \(message)")
+                }
+                return .permanent("http \(status): \(message)")
             case .rateLimited:
                 // Login-rate-limit shape reused defensively: surface, don't spin.
                 return .permanent("rate limited")
@@ -170,6 +188,17 @@ enum TransferErrorClassify {
             }
         }
         return .permanent(error.localizedDescription)
+    }
+
+    /// Server-requested wait (`Retry-After`, seconds) carried by `error`,
+    /// looking through `ProtonAPIError.transport` wrapping.
+    static func retryAfter(_ error: Error) -> TimeInterval? {
+        guard let api = error as? ProtonAPIError else { return nil }
+        switch api {
+        case let .http(_, _, _, retryAfter): return retryAfter
+        case let .transport(underlying): return self.retryAfter(underlying)
+        default: return nil
+        }
     }
 
     /// True for every shape a cancelled upload surfaces as: Swift
@@ -197,13 +226,24 @@ enum TransferRetryPolicy: Sendable {
     static let capNanoseconds: UInt64 = 60_000_000_000
     static let maxJitterNanoseconds: UInt64 = 1_000_000_000
 
-    static func delayNanoseconds(failures: Int, jitter: UInt64 = 0) -> UInt64 {
+    /// Longest server-requested wait honoured (a hostile/buggy header must
+    /// not park a slot for hours); 5 minutes.
+    static let retryAfterCapNanoseconds: UInt64 = 300_000_000_000
+
+    /// `retryAfter` (seconds, from the server's `Retry-After`) raises the
+    /// delay to at least that long (capped at `retryAfterCapNanoseconds`),
+    /// jitter still added on top so parallel jobs don't stampede.
+    static func delayNanoseconds(failures: Int, jitter: UInt64 = 0, retryAfter: TimeInterval? = nil) -> UInt64 {
         let n = max(1, failures)
         // 2^(n-1), saturated before the shift can overflow.
         let shift = min(n - 1, 10)
         let exponential = baseNanoseconds << shift
-        let capped = min(capNanoseconds, exponential)
-        return capped + min(jitter, maxJitterNanoseconds)
+        var base = min(capNanoseconds, exponential)
+        if let retryAfter, retryAfter > 0 {
+            let requested = min(Double(retryAfterCapNanoseconds), retryAfter * 1_000_000_000)
+            base = max(base, UInt64(requested))
+        }
+        return base + min(jitter, maxJitterNanoseconds)
     }
 
     static func randomJitter() -> UInt64 {
@@ -221,6 +261,35 @@ protocol TransferUploader: Sendable {
         job: TransferJob,
         progress: @Sendable (Int64) async -> Void
     ) async throws -> String?
+
+    /// Same, plus side-channel events the queue persists (draft IDs,
+    /// refreshed bookmark). Defaults to the two-argument form.
+    func upload(
+        job: TransferJob,
+        progress: @Sendable (Int64) async -> Void,
+        events: TransferUploadEvents
+    ) async throws -> String?
+}
+
+extension TransferUploader {
+    func upload(
+        job: TransferJob,
+        progress: @Sendable (Int64) async -> Void,
+        events: TransferUploadEvents
+    ) async throws -> String? {
+        try await upload(job: job, progress: progress)
+    }
+}
+
+/// Callbacks an uploader fires mid-job so the queue can persist state that
+/// must survive a crash/relaunch.
+struct TransferUploadEvents: Sendable {
+    /// The remote draft exists (F8.2-R3): LinkID + RevisionID.
+    var draftCreated: @Sendable (_ linkID: String, _ revisionID: String) async -> Void = { _, _ in }
+
+    init(draftCreated: @escaping @Sendable (_ linkID: String, _ revisionID: String) async -> Void = { _, _ in }) {
+        self.draftCreated = draftCreated
+    }
 }
 
 /// Creates (or returns the existing) remote folder under a parent.
@@ -648,14 +717,22 @@ actor TransferQueue {
             publish()
             pump()
         }
-        guard owns(id, generation), let first = jobs[id], first.state == .uploading else { return }
+        guard owns(id, generation), var first = jobs[id], first.state == .uploading else { return }
+        if first.clientUID == nil { // jobs persisted before F8.2-R3
+            first.clientUID = UUID().uuidString
+            jobs[id] = first
+        }
         var job = first
+        let events = TransferUploadEvents(draftCreated: { [self] linkID, revisionID in
+            await self.recordDraft(id: id, generation: generation, linkID: linkID, revisionID: revisionID)
+        })
         // Attempt loop: transient failures back off in-slot; pause/cancel win.
         while true {
             do {
                 let linkID = try await uploader.upload(
                     job: job,
-                    progress: { [self] done in await self.reportProgress(id: id, bytes: done) }
+                    progress: { [self] done in await self.reportProgress(id: id, bytes: done) },
+                    events: events
                 )
                 // The server committed the file. Record it even if the job
                 // was paused (or paused+resumed) meanwhile: discarding the
@@ -665,6 +742,8 @@ actor TransferQueue {
                 done.state = .done
                 done.bytesDone = done.bytesTotal
                 done.remoteLinkID = linkID
+                done.draftLinkID = nil
+                done.draftRevisionID = nil
                 done.errorMessage = nil
                 done.updatedAt = Date()
                 jobs[id] = done
@@ -699,7 +778,7 @@ actor TransferQueue {
                     retrying.errorMessage = message
                     retrying.updatedAt = Date()
                     jobs[id] = retrying
-                    job = retrying
+                    job = retrying // carries the persisted draft IDs into the retry
                     if job.attempt >= job.maxAttempts {
                         jobs[id]?.state = .failed
                         return
@@ -708,7 +787,8 @@ actor TransferQueue {
                     publish()
                     await sleeper(TransferRetryPolicy.delayNanoseconds(
                         failures: job.attempt,
-                        jitter: TransferRetryPolicy.randomJitter()
+                        jitter: TransferRetryPolicy.randomJitter(),
+                        retryAfter: TransferErrorClassify.retryAfter(error)
                     ))
                     // Pause/cancel/remove during backoff wins over the retry.
                     guard owns(id, generation), jobs[id]?.state == .uploading,
@@ -717,6 +797,16 @@ actor TransferQueue {
                 }
             }
         }
+    }
+
+    /// Persists the draft the current attempt created (F8.2-R3), so the
+    /// next attempt — even after a crash — can delete it.
+    private func recordDraft(id: UUID, generation: UInt64, linkID: String, revisionID: String) {
+        guard owns(id, generation), var j = jobs[id] else { return }
+        j.draftLinkID = linkID
+        j.draftRevisionID = revisionID
+        jobs[id] = j
+        persist(urgent: true)
     }
 
     // MARK: persistence (coalesced; F8.2-R2)
