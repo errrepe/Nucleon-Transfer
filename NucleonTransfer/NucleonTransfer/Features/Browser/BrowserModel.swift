@@ -4,23 +4,50 @@
 // inside the DriveListing actor; this model only reorders and caches the
 // already-decrypted rows, so no CPU work ever runs on the main executor.
 // Nothing is persisted to disk — the cache dies with the view.
+// F8.3-P3: each folder's cache is its own @Observable `FolderStore`, so a
+// listing landing in one folder only invalidates the views reading THAT
+// folder; the sorted/filtered rows are memoized per store.
 import Foundation
+
+/// Cached listing for one folder (F8.3-P3: one observable object per
+/// folder linkID). Old rows stay visible while `phase == .loading` so
+/// reloads never blank the table.
+@MainActor
+@Observable
+final class FolderStore {
+    /// The folder's rows as last listed (minus optimistic removals). Every
+    /// write bumps `itemsVersion`, which keys the visible-rows memo.
+    var items: [DriveItem] = [] {
+        didSet { itemsVersion &+= 1 }
+    }
+    var phase: BrowserModel.LoadPhase = .idle
+    /// Set by `markStale` after an app operation touched the folder;
+    /// the next `load` refetches instead of serving the cache.
+    var isStale = false
+
+    @ObservationIgnored private var itemsVersion: UInt64 = 0
+    @ObservationIgnored private var memo = VisibleItemsMemo()
+
+    /// Rows after the search filter and the Table sort order, recomputed
+    /// only when the rows, `sortOrder` or `filterText` changed since the
+    /// last call (F8.3-P3). Reading `items` keeps the caller observing
+    /// this folder; the memo itself is untracked.
+    func visibleItems(
+        sortOrder: [KeyPathComparator<DriveItem>],
+        filterText: String
+    ) -> [DriveItem] {
+        memo.items(from: items, version: itemsVersion, query: filterText, using: sortOrder)
+    }
+
+    /// Recomputations so far (DEBUG introspection for the memo).
+    var visibleComputeCount: Int { memo.computeCount }
+}
 
 @MainActor
 @Observable
 final class BrowserModel {
     enum LoadPhase: Equatable {
         case idle, loading, loaded, failed(String)
-    }
-
-    /// Cached listing for one folder, keyed by folder linkID. Old rows stay
-    /// visible while `phase == .loading` so reloads never blank the table.
-    struct FolderState {
-        var items: [DriveItem] = []
-        var phase: LoadPhase = .idle
-        /// Set by `markStale` after an app operation touched the folder;
-        /// the next `load` refetches instead of serving the cache.
-        var isStale = false
     }
 
     let root: DriveRoot
@@ -35,7 +62,10 @@ final class BrowserModel {
     }
     /// Where the window is right now: deepest pushed folder, or the root.
     var current: DriveLocation { path.last ?? rootLocation }
-    private(set) var folders: [String: FolderState] = [:] // by folder linkID
+    /// Per-folder stores by folder linkID. Untracked and only ever grown
+    /// (a store is created on first access, then mutated in place), so
+    /// loading one folder never invalidates another folder's views.
+    @ObservationIgnored private var folders: [String: FolderStore] = [:]
     var selection: Set<DriveItem.ID> = []
     var sortOrder: [KeyPathComparator<DriveItem>] = [
         KeyPathComparator(\.name, comparator: .localizedStandard)
@@ -93,17 +123,19 @@ final class BrowserModel {
         return [rootLocation] + Array(path.prefix(through: index))
     }
 
-    /// Cached state for `loc`, or an empty idle state when never loaded.
-    func state(for loc: DriveLocation) -> FolderState {
-        folders[loc.linkID] ?? FolderState()
+    /// The store for `loc` — created empty and idle on first access, the
+    /// same object afterwards.
+    func state(for loc: DriveLocation) -> FolderStore {
+        if let store = folders[loc.linkID] { return store }
+        let store = FolderStore()
+        folders[loc.linkID] = store
+        return store
     }
 
-    /// Rows for `loc` after the search filter and the Table sort order.
+    /// Rows for `loc` after the search filter and the Table sort order —
+    /// memoized per folder (F8.3-P3).
     func visibleItems(for loc: DriveLocation) -> [DriveItem] {
-        DriveItemOrdering.sorted(
-            DriveItemOrdering.filtered(state(for: loc).items, query: filterText),
-            using: sortOrder
-        )
+        state(for: loc).visibleItems(sortOrder: sortOrder, filterText: filterText)
     }
 
     /// Fetches `loc`'s children into the cache. Skips the network when the
@@ -118,18 +150,16 @@ final class BrowserModel {
     /// survives, so the next visit refetches).
     func load(_ loc: DriveLocation, force: Bool = false) async {
         if previewStubbed { return }
-        let cached = state(for: loc)
-        if cached.phase == .loaded, !force, !cached.isStale { return }
+        let store = state(for: loc)
+        if store.phase == .loaded, !force, !store.isStale { return }
         // A listing of this folder is already in flight and nothing marked
         // it stale since: it will publish — don't start a duplicate.
-        if cached.phase == .loading, !force, !cached.isStale { return }
+        if store.phase == .loading, !force, !store.isStale { return }
         let token = loadGate.begin(folder: loc.linkID)
-        var starting = cached
-        starting.phase = .loading
-        starting.isStale = false
-        folders[loc.linkID] = starting
+        store.phase = .loading
+        store.isStale = false
         guard let listing = session.listing else {
-            folders[loc.linkID]?.phase = .failed("Session not ready. Sign in again.")
+            store.phase = .failed("Session not ready. Sign in again.")
             return
         }
         do {
@@ -139,10 +169,9 @@ final class BrowserModel {
             guard session.listing === listing,
                   let visible = loadGate.apply(items, token: token, folder: loc.linkID)
             else { return }
-            var state = state(for: loc)
-            state.items = visible
-            state.phase = .loaded
-            folders[loc.linkID] = state
+            // Same store object: a stale flag set meanwhile survives.
+            store.items = visible
+            store.phase = .loaded
         } catch let error as ProtonAPIError where error == .unauthorized {
             // Only the session that produced this listing may be signed
             // out — a late 401 from an old session must not end a new one.
@@ -152,8 +181,7 @@ final class BrowserModel {
             guard session.listing === listing,
                   loadGate.isCurrent(token, folder: loc.linkID)
             else { return }
-            folders[loc.linkID, default: FolderState()].phase =
-                .failed(UserFacingError.message(for: error))
+            store.phase = .failed(UserFacingError.message(for: error))
         }
     }
 
@@ -207,7 +235,7 @@ final class BrowserModel {
     /// folder on screen. Other stale folders lazily refresh on next visit.
     func markStale(parentLinkIDs: Set<String>) {
         for linkID in parentLinkIDs {
-            folders[linkID]?.isStale = true
+            folders[linkID]?.isStale = true // never-visited folders: nothing cached
         }
         guard parentLinkIDs.contains(current.linkID) else { return }
         Task { await load(current) }
@@ -312,7 +340,7 @@ final class BrowserModel {
         let loc = current
         let removed = Set(items.map(\.id))
         let handle = loadGate.beginRemoval(removed, folder: loc.linkID)
-        folders[loc.linkID]?.items.removeAll { removed.contains($0.id) }
+        state(for: loc).items.removeAll { removed.contains($0.id) }
         selection.subtract(ids)
         do {
             try await ops.trash(items, in: loc)
@@ -340,14 +368,13 @@ extension BrowserModel {
         error: String? = nil
     ) -> BrowserModel {
         let model = BrowserModel(root: root, session: PreviewFixtures.session())
-        var state = FolderState()
-        state.items = items
+        let store = model.state(for: model.rootLocation)
+        store.items = items
         if let error {
-            state.phase = .failed(error)
+            store.phase = .failed(error)
         } else {
-            state.phase = phase
+            store.phase = phase
         }
-        model.folders[model.rootLocation.linkID] = state
         model.previewStubbed = true
         return model
     }

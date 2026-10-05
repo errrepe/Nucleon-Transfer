@@ -12,7 +12,29 @@
 // drop API; the system draws the row highlight). File rows carry no
 // modifier, so a drop on them falls through to the table-level .onDrop
 // in FolderView targeting the open folder.
+// F8.3-P3: the row under the pointer lives in a tiny @Observable
+// (`RowHoverState`) instead of FolderView @State — pointer moves no longer
+// re-evaluate FolderView/FolderTable, only the drop overlay that reads it.
 import SwiftUI
+
+/// The row under the pointer, written by FolderTable's row hover handlers
+/// and read only by the drop overlay (B10 destination label). Kept out of
+/// any view's body so hovering doesn't invalidate the folder screen.
+@MainActor
+@Observable
+final class RowHoverState {
+    private(set) var item: DriveItem?
+
+    /// Leaving a row only clears the state when it still names that row;
+    /// unchanged values are not re-assigned (no spurious notifications).
+    func track(_ row: DriveItem, hovering: Bool) {
+        if hovering {
+            if item != row { item = row }
+        } else if item == row {
+            item = nil
+        }
+    }
+}
 
 struct FolderTable: View {
     /// The visible rows for the current folder — already filtered and
@@ -25,9 +47,10 @@ struct FolderTable: View {
     /// the $model.selection / $model.sortOrder Table bindings.
     @Bindable var model: BrowserModel
 
-    /// The row under the pointer — FolderView resolves it through
-    /// DropTargeting so the drop overlay names the real destination.
-    @Binding var hoveredItem: DriveItem?
+    /// The row under the pointer — FolderView's drop overlay resolves it
+    /// through DropTargeting so it names the real destination. Written
+    /// from hover callbacks only, never read in `body`.
+    let hover: RowHoverState
 
     var body: some View {
         Table(of: DriveItem.self, selection: $model.selection, sortOrder: $model.sortOrder) {
@@ -75,7 +98,7 @@ struct FolderTable: View {
             ForEach(items) { item in
                 if item.isFolder && model.root.allowsWrites {
                     TableRow(item)
-                        .onHover { trackHovered(item, $0) }
+                        .onHover { hover.track(item, hovering: $0) }
                         // B10: a drop on this row uploads into THAT
                         // folder — pinned by location, so a mid-drop
                         // navigation can't retarget it.
@@ -84,7 +107,7 @@ struct FolderTable: View {
                         }
                 } else {
                     TableRow(item)
-                        .onHover { trackHovered(item, $0) }
+                        .onHover { hover.track(item, hovering: $0) }
                 }
             }
         }
@@ -121,16 +144,6 @@ struct FolderTable: View {
             }
         } primaryAction: { ids in
             model.openSelection(ids)
-        }
-    }
-
-    /// Pointer tracking for the drop overlay's label: leaving a row only
-    /// clears the binding when it still names that row.
-    private func trackHovered(_ item: DriveItem, _ hovering: Bool) {
-        if hovering {
-            hoveredItem = item
-        } else if hoveredItem == item {
-            hoveredItem = nil
         }
     }
 
