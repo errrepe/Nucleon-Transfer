@@ -5,6 +5,7 @@
 // phases. Everything collapses to a plain crossfade (or nothing) under
 // System Settings ▸ Accessibility ▸ Display ▸ Reduce motion — callers
 // read `accessibilityReduceMotion` and pass it in.
+import AppKit
 import SwiftUI
 
 enum Motion {
@@ -40,6 +41,33 @@ enum Motion {
     /// roll toward the new value; a plain crossfade under Reduce Motion.
     static func numeric(_ value: Double, reduceMotion: Bool) -> ContentTransition {
         reduceMotion ? .opacity : .numericText(value: value)
+    }
+}
+
+extension Transaction {
+    /// Set by `Motion.rowChange`: the folder table drops every other
+    /// animation (banners, drop overlay, full reloads) and lets only these
+    /// small, deliberate row changes animate.
+    @Entry var animatesRows = false
+}
+
+extension Motion {
+    /// Runs a row insertion/removal in the folder table animated — only
+    /// for a small delta in a modest folder (an NSTableView batch update
+    /// over thousands of rows costs more than it shows) and never under
+    /// Reduce Motion (read from NSWorkspace: callers are models with no
+    /// SwiftUI environment).
+    @MainActor
+    static func rowChange(delta: Int, total: Int, _ body: () -> Void) {
+        guard delta <= 20, total < 2_000,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        else {
+            body()
+            return
+        }
+        var transaction = Transaction(animation: snappy)
+        transaction.animatesRows = true
+        withTransaction(transaction, body)
     }
 }
 

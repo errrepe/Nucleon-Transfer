@@ -203,7 +203,8 @@ struct FolderView: View {
             // Banner/path-bar animations wrap this stack; a refresh that
             // swaps the rows in the same update (Try Again on the
             // "Couldn't refresh" banner) must not animate a 5k-row diff.
-            .transaction { $0.animation = nil }
+            // Only deliberate row changes (Motion.rowChange) get through.
+            .transaction { if !$0.animatesRows { $0.animation = nil } }
             .overlay {
                 stateOverlay
                     .animation(Motion.adaptive(Motion.snappy, reduceMotion: reduceMotion), value: overlayState)

@@ -169,6 +169,10 @@ final class BrowserModel {
     let session: AppSession
     /// Orders overlapping listings and hides optimistic removals (F8.2-R7).
     @ObservationIgnored private var loadGate = FolderLoadGate()
+    /// Folders whose next applied listing animates its row changes — set
+    /// by `createFolder`, consumed by whichever `load` lands first (the
+    /// forced one or the remote-changed one, whichever `loadGate` keeps).
+    @ObservationIgnored private var animatesNextListing: Set<String> = []
     /// DEBUG preview seam: when true, `load` is a no-op so seeded folder
     /// states render offline (see `BrowserModel.preview` below).
     private var previewStubbed = false
@@ -251,7 +255,13 @@ final class BrowserModel {
                   let visible = loadGate.apply(items, token: token, folder: loc.linkID)
             else { return }
             // Same store object: a stale flag set meanwhile survives.
-            store.items = visible
+            if animatesNextListing.remove(loc.linkID) != nil {
+                Motion.rowChange(delta: abs(visible.count - store.items.count), total: visible.count) {
+                    store.items = visible
+                }
+            } else {
+                store.items = visible
+            }
             store.phase = .loaded
         } catch let error as ProtonAPIError where error == .unauthorized {
             // Only the session that produced this listing may be signed
@@ -483,7 +493,8 @@ final class BrowserModel {
     }
 
     /// Creates a folder named `name` in the current folder, refetches it
-    /// and selects the new row. Throws raw — the sheet maps via
+    /// and selects the new row — which slides into the table (polish
+    /// pass 3, `Motion.rowChange`). Throws raw — the sheet maps via
     /// UserFacingError and stays open so the name can be fixed.
     /// (`folderOps.createFolder` already publishes remoteChanged; the
     /// extra forced load is a belt-and-braces refresh, `load` dedupes.)
@@ -496,6 +507,7 @@ final class BrowserModel {
             throw FolderOperationError.sessionNotReady
         }
         let linkID = try await ops.createFolder(name: name, in: current)
+        animatesNextListing.insert(current.linkID)
         await load(current, force: true)
         selection = [linkID]
     }
@@ -526,7 +538,8 @@ final class BrowserModel {
         pendingTrash = []
     }
 
-    /// Optimistic trash (S2.3/6.3): rows leave the cache immediately, then
+    /// Optimistic trash (S2.3/6.3): rows leave the cache immediately (and
+    /// the table, animated for a few rows — `Motion.rowChange`), then
     /// the batch endpoint runs; `remoteChanged` marks the parent stale →
     /// reload. A failure force-reloads (rows come back) and lands in
     /// `actionError` for the view's alert. F8.2-R7: the removal is
@@ -538,7 +551,10 @@ final class BrowserModel {
         let loc = current
         let removed = Set(items.map(\.id))
         let handle = loadGate.beginRemoval(removed, folder: loc.linkID)
-        state(for: loc).items.removeAll { removed.contains($0.id) }
+        let store = state(for: loc)
+        Motion.rowChange(delta: removed.count, total: store.items.count) {
+            store.items.removeAll { removed.contains($0.id) }
+        }
         selection.subtract(ids)
         do {
             try await ops.trash(items, in: loc)
