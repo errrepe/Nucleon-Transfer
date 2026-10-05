@@ -7,7 +7,7 @@
 // native NSToolbarItem badge (NSItemBadge: count / text / indicator only,
 // system size and color), drawn OUTSIDE the glass capsule. Per the HIG a
 // badge counts what needs attention, so it shows only the FAILED count;
-// work in flight pulses the icon instead (Safari's downloads button shows
+// work in flight animates the icon instead (Safari's downloads button shows
 // progress on the icon, not a badge). Tooltip + VoiceOver carry both
 // counts (F8.4-U6 — never color or motion alone). Upload speed
 // samples come from UploadCoordinator's snapshot listener (F8.4-U7b), not
@@ -17,7 +17,8 @@
 // it also bounces when a transfer starts while the popover is closed
 // ("Open Transfers when a transfer starts" off) — like Safari's
 // downloads button. Pass 4: when the last transfer finishes with nothing
-// failed, the icon turns into a checkmark for a beat, then back.
+// failed, a checkmark is drawn in for a beat, then the arrows return;
+// work in flight breathes rather than pulses.
 import AppKit
 import SwiftUI
 
@@ -45,9 +46,15 @@ struct TransfersToolbarButton: View {
         Button {
             activity.presentTransfers.toggle()
         } label: {
-            Label("Transfers", systemImage: showsAllDone ? "checkmark.circle" : "arrow.up.arrow.down")
-                .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
-                .symbolEffect(.pulse, options: .repeating, isActive: isInFlight)
+            Label {
+                Text("Transfers")
+            } icon: {
+                glyph
+            }
+            // Pass 4: breathe, not pulse — the icon swells gently while
+            // work is in flight instead of blinking.
+            .symbolEffect(.breathe, options: .repeating, isActive: isInFlight && !reduceMotion)
+            .symbolEffect(.pulse, options: .repeating, isActive: isInFlight && reduceMotion)
                 .symbolEffect(.bounce, value: reduceMotion ? 0 : failedCount)
                 .symbolEffect(.bounce, value: reduceMotion ? 0 : startBounces)
         }
@@ -64,7 +71,7 @@ struct TransfersToolbarButton: View {
         }
         .task(id: showsAllDone) {
             guard showsAllDone else { return }
-            try? await Task.sleep(for: .seconds(1.5))
+            try? await Task.sleep(for: Motion.symbolBeat)
             withAnimation(Motion.snappy) { showsAllDone = false }
         }
         // M4: match the View-menu wording ("Show Transfers") and say
@@ -84,6 +91,27 @@ struct TransfersToolbarButton: View {
             // environment — popover content is hosted off-hierarchy too.
             panel
                 .environment(session)
+        }
+    }
+
+    /// The arrows, or for a beat after everything finished cleanly a
+    /// checkmark drawn in like a pen stroke (crossfade under Reduce Motion).
+    @ViewBuilder
+    private var glyph: some View {
+        if showsAllDone {
+            let check = Image(systemName: "checkmark.circle")
+            if reduceMotion {
+                check.transition(.opacity)
+            } else {
+                check.transition(.symbolEffect(.drawOn))
+            }
+        } else {
+            let arrows = Image(systemName: "arrow.up.arrow.down")
+            if reduceMotion {
+                arrows.transition(.opacity)
+            } else {
+                arrows.transition(.symbolEffect(.appear))
+            }
         }
     }
 

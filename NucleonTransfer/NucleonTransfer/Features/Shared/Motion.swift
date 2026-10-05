@@ -15,6 +15,13 @@ enum Motion {
     /// Larger layout changes (banners, phase switches).
     static let smooth = Animation.smooth(duration: 0.35)
 
+    /// How long a toolbar symbol holds its "done" form (a filled trash,
+    /// a checkmark) before swapping back — long enough to be seen.
+    static let symbolBeat: Duration = .milliseconds(1600)
+    /// Symbol effects run a little slower than the system default: at
+    /// full speed the toolbar gestures read as a flicker.
+    static let symbolOptions = SymbolEffectOptions.speed(0.7)
+
     /// `animation`, or a short crossfade when Reduce Motion is on —
     /// opacity changes are still allowed; movement and scale are not.
     static func adaptive(_ animation: Animation, reduceMotion: Bool) -> Animation {
