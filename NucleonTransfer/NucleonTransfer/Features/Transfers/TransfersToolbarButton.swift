@@ -34,16 +34,17 @@ struct TransfersToolbarButton: View {
         Button {
             activity.presentTransfers.toggle()
         } label: {
-            // The toolbar clips the item to its label's bounds, so a badge
-            // offset past the icon's edge was cut in half (live check, twice).
-            // The icon gets a fixed, slightly larger frame (stable whether
-            // or not a badge shows) and the badge sits inside its corner.
+            // The toolbar clips the item to its label's bounds: a badge
+            // offset past the icon was cut in half, and one inside the
+            // icon's corner covered the arrows (live checks). The badge
+            // sits NEXT to the icon instead — the item widens while it shows.
             Label {
                 Text("Transfers")
             } icon: {
-                Image(systemName: "arrow.up.arrow.down")
-                    .frame(width: 30, height: 22)
-                    .overlay(alignment: .topTrailing) { badge }
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up.arrow.down")
+                    badge
+                }
             }
         }
         // M4: match the View-menu wording ("Show Transfers") and say
@@ -80,7 +81,7 @@ struct TransfersToolbarButton: View {
             capsule(fill: AnyShapeStyle(.tint)) {
                 Text(count, format: .number)
             }
-            .overlay(alignment: .topLeading) {
+            .overlay(alignment: .leading) {
                 if failed > 0 { failedMarker }
             }
         case let .failed(count):
@@ -102,7 +103,7 @@ struct TransfersToolbarButton: View {
             .foregroundStyle(.white)
             .frame(width: 9, height: 9)
             .background(.red, in: Circle())
-            .offset(x: -3, y: -1)
+            .offset(x: -4)
             .accessibilityHidden(true)
     }
 
