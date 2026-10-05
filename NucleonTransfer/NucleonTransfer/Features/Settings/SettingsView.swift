@@ -5,6 +5,8 @@
 // uploads cap is applied to the TransferQueue on change (the app scene's
 // launch .task applies the stored value; SettingsView only exists on
 // demand). Keys + defaults live in Core's AppSettings.
+// Account (F8.5-V3): Keep me signed in, Require Touch ID, Forget This
+// Mac — AccountSettingsView.
 // About: icon, name, version + build, the 6.6 disclaimer, source link.
 // U7 layout: no fixed frame (clipped at larger text sizes) — each grouped
 // Form sizes itself vertically; only a minimum width is set.
@@ -15,7 +17,7 @@ import SwiftUI
 /// (shown in the standard panel's credits) and the Settings › About tab.
 enum AboutContent {
     static let disclaimer = String(
-        localized: "Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored.",
+        localized: "Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored. “Keep me signed in” saves a session token in this Mac's keychain.",
         comment: "About panel / Settings › About disclaimer"
     )
     static var sourceCodeURL: URL? { HelpLinks.source }
@@ -44,6 +46,8 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gear") }
             transfersTab
                 .tabItem { Label("Transfers", systemImage: "arrow.up.arrow.down") }
+            AccountSettingsView()
+                .tabItem { Label("Account", systemImage: "person.crop.circle") }
             aboutTab
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
@@ -174,7 +178,7 @@ struct SettingsView: View {
     }
 }
 
-private extension View {
+extension View {
     /// Grouped Form that takes its natural height (no inner scrolling,
     /// no extra padding — the grouped style already insets).
     func settingsFormLayout() -> some View {

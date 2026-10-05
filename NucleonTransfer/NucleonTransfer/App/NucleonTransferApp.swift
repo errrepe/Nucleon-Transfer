@@ -1,6 +1,7 @@
 // Nucleon Transfer — app entry point (F7 S4.2): a single main window
 // (`Window`, not WindowGroup — there is exactly one drive browser), the
-// menu commands (AppCommands), and the Settings scene. The launch `.task`
+// menu commands (AppCommands; DebugCommands in DEBUG builds), and the
+// Settings scene. The launch `.task`
 // applies the persisted "simultaneous uploads" cap to the TransferQueue;
 // the Settings stepper writes the same key and applies on change.
 // Quit (F8.2-R2): the queue coalesces its snapshot writes, so termination
@@ -34,6 +35,8 @@ struct NucleonTransferApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             AppCommands()
+            // F8.5-V3: empty in release builds (#if DEBUG inside).
+            DebugCommands()
         }
 
         Settings {

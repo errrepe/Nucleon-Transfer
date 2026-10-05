@@ -425,6 +425,17 @@
         }
       }
     },
+    "Ask for Touch ID before resuming the saved sign-in. Adding or removing a fingerprint removes the saved sign-in." : {
+      "comment" : "Settings › Account: Require Touch ID explanation",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pede o Touch ID antes de retomar a sessão salva. Adicionar ou remover uma digital remove a sessão salva."
+          }
+        }
+      }
+    },
     "Ask where to save every time" : {
       "comment" : "Settings toggle",
       "localizations" : {
@@ -1382,6 +1393,39 @@
         }
       }
     },
+    "Forget This Mac" : {
+      "comment" : "Forget this Mac confirmation button",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esquecer Este Mac"
+          }
+        }
+      }
+    },
+    "Forget this Mac?" : {
+      "comment" : "Forget this Mac confirmation title",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esquecer este Mac?"
+          }
+        }
+      }
+    },
+    "Forget This Mac…" : {
+      "comment" : "Settings › Account button (opens a confirmation)",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esquecer Este Mac…"
+          }
+        }
+      }
+    },
     "Forgot password?" : {
       "comment" : "Login screen link",
       "localizations" : {
@@ -1433,6 +1477,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ocultar Barra de Caminho"
+          }
+        }
+      }
+    },
+    "Keep me signed in" : {
+      "comment" : "Login screen checkbox (F8.5)",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manter sessão iniciada"
           }
         }
       }
@@ -1667,13 +1722,13 @@
         }
       }
     },
-    "Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored." : {
+    "Nucleon Transfer is an independent, open-source app. It is not affiliated with or endorsed by Proton AG. Your password is used only to sign in and unlock your keys on this Mac — it is never stored. “Keep me signed in” saves a session token in this Mac's keychain." : {
       "comment" : "About panel / Settings › About disclaimer",
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Nucleon Transfer é um app independente e de código aberto. Ele não é afiliado nem endossado pela Proton AG. Sua senha é usada apenas para iniciar sessão e desbloquear suas chaves neste Mac — ela nunca é armazenada."
+            "value" : "O Nucleon Transfer é um app independente e de código aberto. Ele não é afiliado nem endossado pela Proton AG. Sua senha é usada apenas para iniciar sessão e desbloquear suas chaves neste Mac — ela nunca é armazenada. A opção “Manter sessão iniciada” guarda um token de sessão nas Chaves deste Mac."
           }
         }
       }
@@ -1982,6 +2037,17 @@
         }
       }
     },
+    "Require Touch ID" : {
+      "comment" : "Settings › Account toggle (F8.5)",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exigir Touch ID"
+          }
+        }
+      }
+    },
     "Resume" : {
       "localizations" : {
         "pt-BR" : {
@@ -2010,6 +2076,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tentar Novamente as com Falha"
+          }
+        }
+      }
+    },
+    "Saved sign-in" : {
+      "comment" : "Settings › Account: row label of the Forget This Mac button",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sessão salva"
           }
         }
       }
@@ -2169,6 +2246,17 @@
         }
       }
     },
+    "Sign-In" : {
+      "comment" : "Settings › Account section header",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Início de Sessão"
+          }
+        }
+      }
+    },
     "Sign-in couldn't start because part of the app is missing. Reinstall Nucleon Transfer, then try again." : {
       "localizations" : {
         "pt-BR" : {
@@ -2252,6 +2340,28 @@
         }
       }
     },
+    "Stay signed in on this Mac after you quit. Takes effect at your next sign-in. Your password is never stored." : {
+      "comment" : "Settings › Account: Keep me signed in explanation",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue com a sessão iniciada neste Mac depois de encerrar o app. Vale a partir do próximo início de sessão. Sua senha nunca é armazenada."
+          }
+        }
+      }
+    },
+    "Stay signed in on this Mac after you quit. Your password is never stored." : {
+      "comment" : "Login screen “Keep me signed in” tooltip",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue com a sessão iniciada neste Mac depois de encerrar o app. Sua senha nunca é armazenada."
+          }
+        }
+      }
+    },
     "Storage" : {
       "comment" : "VoiceOver label of the storage gauge",
       "localizations" : {
@@ -2319,6 +2429,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "O arquivo original não está mais no seu Mac. Adicione-o novamente para enviá-lo."
+          }
+        }
+      }
+    },
+    "The saved sign-in and the remembered username are removed from this Mac. You stay signed in until you sign out or quit." : {
+      "comment" : "Forget this Mac confirmation message",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A sessão salva e o nome de usuário lembrado são removidos deste Mac. Você continua com a sessão iniciada até encerrá-la ou sair do app."
+          }
+        }
+      }
+    },
+    "The saved sign-in was removed from this Mac." : {
+      "comment" : "Settings › Account: shown after Forget This Mac",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A sessão salva foi removida deste Mac."
           }
         }
       }
@@ -2465,6 +2597,28 @@
         }
       }
     },
+    "Touch ID didn’t unlock your saved sign-in. Use Touch ID to try again, or sign in with your password." : {
+      "comment" : "Login screen: Touch ID prompt for a saved sign-in was cancelled or unavailable (F8.5)",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Touch ID não desbloqueou sua sessão salva. Use o Touch ID para tentar novamente ou inicie sessão com sua senha."
+          }
+        }
+      }
+    },
+    "Touch ID isn’t available on this Mac right now. It needs a Touch ID sensor with an enrolled fingerprint." : {
+      "comment" : "Settings › Account: Require Touch ID disabled, no biometrics",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Touch ID não está disponível neste Mac agora. É preciso um sensor Touch ID com uma digital cadastrada."
+          }
+        }
+      }
+    },
     "Transfer Actions" : {
       "comment" : "Transfers popover menu button",
       "localizations" : {
@@ -2507,12 +2661,45 @@
         }
       }
     },
+    "turn off Touch ID for your saved sign-in" : {
+      "comment" : "Touch ID prompt when switching Require Touch ID off",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "desativar o Touch ID da sua sessão salva"
+          }
+        }
+      }
+    },
+    "Turn on “Keep me signed in” to protect the saved sign-in with Touch ID." : {
+      "comment" : "Settings › Account: Require Touch ID disabled while Keep me signed in is off",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ative “Manter sessão iniciada” para proteger a sessão salva com o Touch ID."
+          }
+        }
+      }
+    },
     "Two-Factor Authentication" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Autenticação de Dois Fatores"
+          }
+        }
+      }
+    },
+    "unlock your saved sign-in" : {
+      "comment" : "Touch ID prompt: “Nucleon Transfer is trying to unlock your saved sign-in.”",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "desbloquear sua sessão salva"
           }
         }
       }
@@ -2686,6 +2873,17 @@
         }
       }
     },
+    "Use Touch ID" : {
+      "comment" : "Login screen button: retry the Touch ID unlock of the saved sign-in",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar Touch ID"
+          }
+        }
+      }
+    },
     "Verify" : {
       "localizations" : {
         "pt-BR" : {
@@ -2765,6 +2963,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Seu Mac não conseguiu gerar os dados aleatórios seguros necessários para iniciar sessão. Tente novamente; se continuar acontecendo, reinicie o Mac."
+          }
+        }
+      }
+    },
+    "Your saved sign-in has expired. Please sign in again." : {
+      "comment" : "Login screen: a remembered session could not be restored",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sua sessão salva expirou. Inicie sessão novamente."
           }
         }
       }
@@ -2929,6 +3138,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "para %@"
+          }
+        }
+      }
+    },
+    "Your Touch ID fingerprints changed, so the saved sign-in was removed. Please sign in again." : {
+      "comment" : "Login screen: Touch ID enrollment changed, the saved sign-in was deleted (F8.5)",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suas digitais do Touch ID mudaram, então a sessão salva foi removida. Inicie sessão novamente."
           }
         }
       }

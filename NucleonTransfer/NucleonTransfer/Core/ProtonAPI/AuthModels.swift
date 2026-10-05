@@ -82,7 +82,9 @@ struct AuthRefreshRequest: Encodable, Sendable {
     var grantType = "refresh_token"
     var redirectURI = "https://protonmail.ch"
     var state: String
-    var accessToken: String
+    /// Omitted from the body when nil: a restored session (F8.5) refreshes
+    /// before it has an access token. Live sessions still send it.
+    var accessToken: String?
 
     enum CodingKeys: String, CodingKey {
         case uid = "UID"
